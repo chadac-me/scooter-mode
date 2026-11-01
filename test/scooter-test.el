@@ -356,5 +356,32 @@
         (scooter-agent-shell--enable-files)
         (should-not scooter-agent-shell-files-mode)))))
 
+(ert-deftest scooter-test-shell-renamed-after-title ()
+  (let ((scooter-servers '((home :url "https://s.example")))
+        (title nil))
+    (cl-letf (((symbol-function 'scooter-request)
+               (lambda (_server _method path)
+                 (should (equal path "/conversations/abcdef123456"))
+                 `((id . "abcdef123456") (title . ,title))))
+              ((symbol-function 'agent-shell--project-name) (lambda () "proj"))
+              ((symbol-function 'agent-shell--format-buffer-name)
+               (lambda (name project) (format "%s Agent @ %s" name project))))
+      (with-temp-buffer
+        (rename-buffer "Scooter abcdef12@home Agent @ proj" t)
+        (setq-local agent-shell--state
+                    '((:agent-config (:identifier . scooter-home) (:buffer-name . "Scooter abcdef12@home"))
+                      (:session (:id . "abcdef123456"))))
+        (scooter-agent-shell-retitle)
+        (should (equal (buffer-name) "Scooter abcdef12@home Agent @ proj"))
+        (setq title "Fix the Login redirect")
+        (scooter-agent-shell-retitle)
+        (should (equal (buffer-name) "Scooter fix-the-login-redirect@home Agent @ proj"))
+        (should (equal (map-nested-elt agent-shell--state '(:agent-config :buffer-name))
+                       "Scooter fix-the-login-redirect@home"))
+        (rename-buffer "mine" t)
+        (setq title "Something else")
+        (scooter-agent-shell-retitle)
+        (should (equal (buffer-name) "mine"))))))
+
 (provide 'scooter-test)
 ;;; scooter-test.el ends here

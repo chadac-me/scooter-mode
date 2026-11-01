@@ -17,11 +17,16 @@
 (require 'server)
 (require 'scooter-server)
 (require 'scooter-auth)
+(require 'scooter-http)
 (require 'scooter-install)
+(require 'scooter-list)
 
 (declare-function agent-shell-make-agent-config "agent-shell")
 (declare-function agent-shell-start "agent-shell")
 (declare-function agent-shell--make-acp-client "agent-shell")
+(declare-function agent-shell--format-buffer-name "agent-shell")
+(declare-function agent-shell--project-name "agent-shell")
+(declare-function agent-shell-subscribe-to "agent-shell")
 (declare-function scooter-tramp-file-name "scooter-tramp")
 (defvar agent-shell-agent-configs)
 (defvar agent-shell--state)
@@ -67,11 +72,15 @@ PROJECT non-nil puts the working directory's git checkout in the first prompt."
             (and project '("--project"))
             (scooter-agent-shell--headers-args server))))
 
+(defun scooter-agent-shell-name (server &optional title)
+  "Return the agent name for SERVER's shell, showing TITLE when given."
+  (if title (format "Scooter %s@%s" title server) (format "Scooter[%s]" server)))
+
 (cl-defun scooter-agent-shell-config (server &key title project)
   "Return an agent-shell config for SERVER.
 TITLE names the buffer; PROJECT is as in `scooter-acp-arguments'."
   (require 'agent-shell)
-  (let ((name (if title (format "Scooter %s@%s" title server) (format "Scooter[%s]" server))))
+  (let ((name (scooter-agent-shell-name server title)))
     (agent-shell-make-agent-config
      :identifier (intern (format "scooter-%s" server))
      :mode-line-name (format "Scooter[%s]" server)
@@ -85,6 +94,33 @@ TITLE names the buffer; PROJECT is as in `scooter-acp-arguments'."
         :command-params (scooter-acp-arguments server :project project)
         :context-buffer buffer))
      :install-instructions "Install the bridge: nix profile install github:chadac-me/scooter-mode")))
+
+;;;; Buffer names
+
+(defun scooter-agent-shell-retitle (&optional _event)
+  "Rename this shell after its conversation's title slug.
+A buffer the user renamed keeps its name."
+  (when-let* ((conv (scooter-agent-shell-conversation))
+              (reply (ignore-errors
+                       (scooter-request (car conv) "GET" (format "/conversations/%s" (cadr conv)))))
+              (title (alist-get 'title reply))
+              (old (map-nested-elt agent-shell--state '(:agent-config :buffer-name)))
+              (new (scooter-agent-shell-name (car conv) (scooter-slug title)))
+              ((not (equal old new)))
+              (project (agent-shell--project-name))
+              ((string-prefix-p (agent-shell--format-buffer-name old project) (buffer-name))))
+    ;; Shadow rather than mutate: the config may be shared.
+    (setf (map-elt agent-shell--state :agent-config)
+          (cons (cons :buffer-name new) (map-elt agent-shell--state :agent-config)))
+    (rename-buffer (agent-shell--format-buffer-name new project) t)))
+
+(defun scooter-agent-shell--watch-title ()
+  "Retitle Scooter shells after each turn."
+  (when (scooter-agent-shell--server)
+    (agent-shell-subscribe-to :shell-buffer (current-buffer) :event 'turn-complete
+                              :on-event (lambda (_) (scooter-agent-shell-retitle)))))
+
+(add-hook 'agent-shell-mode-hook #'scooter-agent-shell--watch-title)
 
 ;;;; Sandbox files
 

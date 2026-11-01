@@ -4,7 +4,7 @@
 ;; SPDX-License-Identifier: MIT
 
 ;; Author: Chad Crawford
-;; URL: https://github.com/chadac/scooter-mode
+;; URL: https://github.com/chadac-me/scooter-mode
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "29.1") (magit-section "4.0") (transient "0.5") (agent-shell "0.1"))
 ;; Keywords: tools, ai

@@ -84,7 +84,7 @@ TITLE names the buffer; PROJECT is as in `scooter-acp-arguments'."
         :command (scooter-install-program (car scooter-acp-command))
         :command-params (scooter-acp-arguments server :project project)
         :context-buffer buffer))
-     :install-instructions "Install the bridge: nix profile install github:chadac/scooter-mode")))
+     :install-instructions "Install the bridge: nix profile install github:chadac-me/scooter-mode")))
 
 ;;;; Sandbox files
 

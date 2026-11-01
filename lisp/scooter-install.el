@@ -27,7 +27,7 @@
   :group 'scooter)
 
 (defcustom scooter-install-release-url
-  "https://github.com/chadac/scooter-mode/releases/download/v%s/"
+  "https://github.com/chadac-me/scooter-mode/releases/download/v%s/"
   "Release download URL; %s is the version."
   :type 'string
   :group 'scooter)
@@ -101,7 +101,7 @@
                                  program scooter-install-version))
              scooter-install-binary)
            (scooter-install))
-      (user-error "Scooter: `%s' not found; install it with nix profile install github:chadac/scooter-mode"
+      (user-error "Scooter: `%s' not found; install it with nix profile install github:chadac-me/scooter-mode"
                   program)))
 
 (provide 'scooter-install)

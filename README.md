@@ -1,6 +1,6 @@
 # scooter-mode
 
-Use [Scooter](https://github.com/chadac/scooter) from Emacs: browse and start
+Use [Scooter](https://github.com/chadac-me/scooter) from Emacs: browse and start
 conversations on one or more Scooter servers, chat through
 [agent-shell](https://github.com/xenodium/agent-shell), and sign in behind
 oauth2-proxy.
@@ -10,7 +10,7 @@ Work in progress.
 ## Emacs
 
 Needs Emacs 29.1+, `magit-section`, `transient`, `agent-shell` and `curl` 7.76+ (shell-maker checks it), plus
-the `scooter` binary on `PATH` (`nix profile install github:chadac/scooter-mode`).
+the `scooter` binary on `PATH` (`nix profile install github:chadac-me/scooter-mode`).
 
 ```elisp
 (add-to-list 'load-path "~/src/scooter-mode/lisp")
@@ -75,10 +75,10 @@ is rerun once when the server's auth proxy rejects a request, with `{retry}`
 in it replaced by `t` (otherwise `nil`).
 
 Prebuilt static binaries for Linux and macOS (amd64, arm64) are attached to
-each [GitHub release](https://github.com/chadac/scooter-mode/releases), with
+each [GitHub release](https://github.com/chadac-me/scooter-mode/releases), with
 `SHA256SUMS`; `scooter version` prints the release. Or run it with Nix:
 
 ```sh
-nix run github:chadac/scooter-mode -- acp --server https://scooter.example.org \
+nix run github:chadac-me/scooter-mode -- acp --server https://scooter.example.org \
   --headers-command 'pass show scooter/headers'
 ```

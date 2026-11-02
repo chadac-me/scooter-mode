@@ -33,6 +33,11 @@ the `scooter` binary on `PATH` (`nix profile install github:chadac-me/scooter-mo
   `z` suspend, `f` files viewer, `b` browser, `g` refresh, `?` menu.
   Shells are named `Scooter <slug>@<server>`; a new conversation's shell
   takes its slug after the turn in which the agent titles it.
+- Approvals render in the shell. The agent's questions become an
+  agent-shell form (`scooter-agent-shell-forms`, on by default, turns on
+  agent-shell's experimental forms in Scooter shells only; off, they
+  point at the web UI). AWS access requests show the account, risk,
+  policy and approvals still needed above Approve/Deny.
 - `C-c s c`, `C-c s r`, `C-c s p` start a conversation from a prompt, the
   region, or the current project; `C-c s R` sends the region to an existing
   one.

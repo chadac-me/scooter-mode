@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,8 +43,9 @@ type session struct {
 	asked      map[string]bool      // permission requests already sent to the client
 	prefix     string               // prepended to the first prompt
 
-	approveURL string      // where to answer permissions when noAnswer is set
+	approveURL string      // the web UI page that answers requests
 	noAnswer   bool        // the server refuses permission answers from us
+	forms      bool        // the client renders elicitation forms
 	following  atomic.Bool // one stream per conversation, however often it is opened
 }
 
@@ -158,44 +160,120 @@ func (s *session) finishLocked(r turnResult) {
 	s.tr.echoUser = true
 }
 
-// askLocked sends a permission request to the client; holds mu.
+// askLocked puts a pending request to the client; holds mu.
 func (s *session) askLocked(ctx context.Context, in interrupt) {
 	if s.asked[in.ID] {
 		return
 	}
 	s.asked[in.ID] = true
+	qs := questionsOf(in.Metadata.Data)
+	isQuestions := in.Metadata.Kind == kindQuestions && len(qs) > 0
+	switch {
+	case s.noAnswer || (isQuestions && !s.forms):
+		s.pointAtWebUI(in, qs)
+	case isQuestions:
+		go s.askForm(ctx, in, qs)
+	default:
+		go s.askPermission(ctx, in)
+	}
+}
+
+// pointAtWebUI shows a request this client can't answer; qs may be nil.
+func (s *session) pointAtWebUI(in interrupt, qs []question) {
+	note := "\n\n> Waiting for approval: " + in.Message + ". Answer it"
+	if len(qs) > 0 {
+		note = "\n\n> The agent asks:" + strings.ReplaceAll(questionsText(qs), "\n", "\n> ") + "\n>\n> Answer it"
+	}
+	note += " in the Scooter web UI"
+	if s.approveURL != "" {
+		note += ": " + s.approveURL
+	}
+	s.out.notify("session/update", map[string]any{"sessionId": s.id, "update": textChunk("agent_message_chunk", note+".\n")})
+}
+
+// askPermission asks for one of the request's options.
+func (s *session) askPermission(ctx context.Context, in interrupt) {
 	toolCallID := in.ToolCallID
 	if toolCallID == "" {
 		toolCallID = in.ID
 	}
-	if s.noAnswer {
-		note := "\n\n> Waiting for approval: " + in.Message + ". Answer it in the Scooter web UI"
-		if s.approveURL != "" {
-			note += ": " + s.approveURL
-		}
-		s.out.notify("session/update", map[string]any{"sessionId": s.id, "update": textChunk("agent_message_chunk", note+".\n")})
+	title, body := describe(in)
+	call := map[string]any{"toolCallId": toolCallID, "title": title}
+	if body != "" {
+		call["content"] = []any{map[string]any{"type": "content", "content": map[string]any{"type": "text", "text": body}}}
+	}
+	var res struct {
+		Outcome struct {
+			Outcome  string `json:"outcome"`
+			OptionID string `json:"optionId"`
+		} `json:"outcome"`
+	}
+	err := s.out.request(ctx, "session/request_permission", map[string]any{
+		"sessionId": s.id,
+		"toolCall":  call,
+		"options":   in.Metadata.Options,
+	}, &res)
+	if err != nil || res.Outcome.Outcome != "selected" {
 		return
 	}
-	go func() {
-		var res struct {
-			Outcome struct {
-				Outcome  string `json:"outcome"`
-				OptionID string `json:"optionId"`
-			} `json:"outcome"`
+	s.resume(ctx, in.ID, res.Outcome.OptionID, nil)
+}
+
+// askForm asks AskUserQuestion's questions as an ACP form.
+func (s *session) askForm(ctx context.Context, in interrupt, qs []question) {
+	var res struct {
+		Action  string         `json:"action"`
+		Content map[string]any `json:"content"`
+	}
+	params := map[string]any{
+		"sessionId":       s.id,
+		"mode":            "form",
+		"message":         in.Message,
+		"requestedSchema": questionSchema(qs),
+	}
+	if in.ToolCallID != "" {
+		params["toolCallId"] = in.ToolCallID
+	}
+	if err := s.out.request(ctx, "elicitation/create", params, &res); err != nil {
+		log.Printf("session %s: ask questions: %v", s.id, err)
+		if ctx.Err() == nil {
+			s.pointAtWebUI(in, qs)
 		}
-		err := s.out.request(ctx, "session/request_permission", map[string]any{
-			"sessionId": s.id,
-			"toolCall":  map[string]any{"toolCallId": toolCallID, "title": in.Message},
-			"options":   in.Metadata.Options,
-		}, &res)
-		if err != nil || res.Outcome.Outcome != "selected" {
-			return
+		return
+	}
+	answers, ok := formAnswers(qs, res.Content)
+	if res.Action != "accept" || !ok {
+		s.resume(ctx, in.ID, "", nil)
+		return
+	}
+	// The answer option carries the result; Scooter offers exactly one.
+	optionID := "answer"
+	if len(in.Metadata.Options) > 0 {
+		optionID = in.Metadata.Options[0].OptionID
+	}
+	s.resume(ctx, in.ID, optionID, map[string]any{"answers": answers})
+}
+
+// resume answers an interrupt as the web UI does; no optionID dismisses it.
+func (s *session) resume(ctx context.Context, id, optionID string, result map[string]any) {
+	entry := map[string]any{"interruptId": id, "status": "cancelled"}
+	if optionID != "" {
+		payload := map[string]any{"optionId": optionID}
+		if result != nil {
+			payload["result"] = result
 		}
-		err = s.c.call(ctx, "POST", s.path("/permission/"+url.PathEscape(in.ID)), map[string]string{"optionId": res.Outcome.OptionID}, nil)
-		if err != nil {
-			log.Printf("session %s: answer permission: %v", s.id, err)
-		}
-	}()
+		entry["status"], entry["payload"] = "resolved", payload
+	}
+	resp, err := s.c.do(ctx, "POST", "/agui", map[string]any{"threadId": s.id, "resume": []any{entry}})
+	if err != nil {
+		log.Printf("session %s: answer %s: %v", s.id, id, err)
+		return
+	}
+	// The resumed run streams back through the integrity log instead.
+	resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		log.Printf("session %s: answer %s: %s", s.id, id, resp.Status)
+	}
 }
 
 // follow tails the integrity stream, resyncing after gaps or drops.

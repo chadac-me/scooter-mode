@@ -155,6 +155,18 @@
         (should (equal (cons (map-elt client :command) (map-elt client :command-params))
                        '("scooter" "acp" "--server" "https://s.example" "--headers-file" "f")))))))
 
+(ert-deftest scooter-test-agent-shell-forms-are-buffer-local ()
+  (let ((scooter-servers '((home :url "https://s.example"))))
+    (cl-letf (((symbol-function 'scooter-agent-shell--headers-args) (lambda (_) nil))
+              ((symbol-function 'scooter-install-program) #'identity))
+      (dolist (on '(t nil))
+        (let ((scooter-agent-shell-forms on)
+              (config (scooter-agent-shell-config 'home)))
+          (with-temp-buffer
+            (funcall (map-elt config :client-maker) (current-buffer))
+            (should (eq agent-shell-elicitation--experimental-feature-enabled on)))))
+      (should-not (default-value 'agent-shell-elicitation--experimental-feature-enabled)))))
+
 (ert-deftest scooter-test-install-verifies-and-writes ()
   (let* ((bin (unibyte-string 0 127 128 255 10 13))
          (asset (concat "scooter-" (scooter-install--platform)))

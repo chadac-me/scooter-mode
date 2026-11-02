@@ -25,14 +25,14 @@ type fakeScooter struct {
 	subs      []chan frame
 	onMessage func(f *fakeScooter, text string)
 	// selfOnly serves just the router's sandbox self-access routes.
-	selfOnly    bool
-	permissions chan string
-	cancels     chan struct{}
-	messages    chan string
+	selfOnly bool
+	resumes  chan resumeEntry
+	cancels  chan struct{}
+	messages chan string
 }
 
 func newFake(t *testing.T) (*fakeScooter, *httptest.Server) {
-	f := &fakeScooter{t: t, permissions: make(chan string, 4), cancels: make(chan struct{}, 4), messages: make(chan string, 4)}
+	f := &fakeScooter{t: t, resumes: make(chan resumeEntry, 4), cancels: make(chan struct{}, 4), messages: make(chan string, 4)}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	return f, srv
@@ -111,13 +111,17 @@ func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(202, map[string]any{"ok": true})
 		f.messages <- body.Text
 		go f.onMessage(f, body.Text)
-	case len(parts) >= 4 && parts[2] == "permission":
-		var body struct{ OptionID string }
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			f.t.Errorf("decode: %v", err)
+	case r.Method == "POST" && r.URL.Path == "/agui":
+		var body struct {
+			ThreadID string `json:"threadId"`
+			Resume   []resumeEntry
 		}
-		w.WriteHeader(204)
-		f.permissions <- body.OptionID
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Resume) != 1 {
+			f.t.Errorf("resume: %v %+v", err, body)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		f.resumes <- body.Resume[0]
 	case len(parts) >= 3 && parts[2] == "cancel":
 		writeJSON(202, map[string]any{"ok": true})
 		f.cancels <- struct{}{}
@@ -128,10 +132,27 @@ func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
 
 // testClient is an ACP client wired to an in-process agent.
 type testClient struct {
-	rpc     *rpc
-	mu      sync.Mutex
-	updates []map[string]any
-	choose  string
+	rpc      *rpc
+	mu       sync.Mutex
+	updates  []map[string]any
+	requests []clientRequest
+	choose   string
+	form     map[string]any // the elicitation/create reply
+}
+
+type clientRequest struct {
+	method string
+	params json.RawMessage
+}
+
+// resumeEntry is one answer in a POST /agui resume.
+type resumeEntry struct {
+	InterruptID string `json:"interruptId"`
+	Status      string `json:"status"`
+	Payload     struct {
+		OptionID string         `json:"optionId"`
+		Result   map[string]any `json:"result"`
+	} `json:"payload"`
 }
 
 func startBridge(t *testing.T, server string, opts agentOptions) *testClient {
@@ -147,11 +168,20 @@ func startBridge(t *testing.T, server string, opts agentOptions) *testClient {
 
 	tc := &testClient{rpc: newRPC(toAgentW), choose: "allow"}
 	go func() {
-		_ = tc.rpc.serve(ctx, toClientR, func(_ context.Context, method string, _ json.RawMessage) (any, func(), error) {
-			if method != "session/request_permission" {
-				return nil, nil, &rpcError{Code: codeMethodNotFound, Message: method}
+		_ = tc.rpc.serve(ctx, toClientR, func(_ context.Context, method string, params json.RawMessage) (any, func(), error) {
+			tc.mu.Lock()
+			tc.requests = append(tc.requests, clientRequest{method, params})
+			tc.mu.Unlock()
+			switch method {
+			case "session/request_permission":
+				return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": tc.choose}}, nil, nil
+			case "elicitation/create":
+				if tc.form == nil {
+					return nil, nil, &rpcError{Code: codeInvalidParams, Message: "no forms here"}
+				}
+				return tc.form, nil, nil
 			}
-			return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": tc.choose}}, nil, nil
+			return nil, nil, &rpcError{Code: codeMethodNotFound, Message: method}
 		}, func(method string, params json.RawMessage) {
 			var p struct{ Update map[string]any }
 			if err := json.Unmarshal(params, &p); err != nil {
@@ -281,7 +311,7 @@ func TestPermissionRoundTrip(t *testing.T) {
 				}},
 			}},
 		}})
-		got := <-f.permissions
+		got := (<-f.resumes).Payload.OptionID
 		f.emit(map[string]any{"type": "PERMISSION_RESOLVED", "toolCallId": "t9", "optionId": got})
 		f.emit(map[string]any{"type": "RUN_FINISHED", "threadId": "c1", "runId": "r1"})
 	}
@@ -444,7 +474,7 @@ func TestSelfAccessStaysOnOneConversation(t *testing.T) {
 		t.Errorf("approval note = %q", got)
 	}
 	select {
-	case <-f.permissions:
+	case <-f.resumes:
 		t.Error("answered a permission over self-access")
 	case <-time.After(100 * time.Millisecond):
 	}

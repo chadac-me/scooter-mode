@@ -67,12 +67,13 @@ const (
 type translator struct {
 	roles    map[string]string
 	toolArgs map[string]*strings.Builder
+	comments map[string]*commentFilter
 	// Off during our prompt: the client already shows its text.
 	echoUser bool
 }
 
 func newTranslator() *translator {
-	return &translator{roles: map[string]string{}, toolArgs: map[string]*strings.Builder{}, echoUser: true}
+	return &translator{roles: map[string]string{}, toolArgs: map[string]*strings.Builder{}, comments: map[string]*commentFilter{}, echoUser: true}
 }
 
 func (t *translator) apply(ev aguiEvent) ([]update, turnSignal) {
@@ -99,11 +100,14 @@ func (t *translator) apply(ev aguiEvent) ([]update, turnSignal) {
 			}
 			return []update{textChunk("user_message_chunk", ev.Delta)}, sigNone
 		}
-		return []update{textChunk("agent_message_chunk", ev.Delta)}, sigNone
+		return t.agentText("agent_message_chunk", ev.MessageID, ev.Delta), sigNone
 	case "TEXT_MESSAGE_END":
 		delete(t.roles, ev.MessageID)
+		return t.agentFlush("agent_message_chunk", ev.MessageID), sigNone
 	case "REASONING_MESSAGE_CONTENT":
-		return []update{textChunk("agent_thought_chunk", ev.Delta)}, sigNone
+		return t.agentText("agent_thought_chunk", ev.MessageID, ev.Delta), sigNone
+	case "REASONING_MESSAGE_END":
+		return t.agentFlush("agent_thought_chunk", ev.MessageID), sigNone
 	case "SYSTEM_MESSAGE":
 		return []update{textChunk("user_message_chunk", "["+ev.Source+"] "+ev.Text)}, sigNone
 	case "TOOL_CALL_START":
@@ -141,6 +145,33 @@ func (t *translator) apply(ev aguiEvent) ([]update, turnSignal) {
 		}}, sigNone
 	}
 	return nil, sigNone
+}
+
+// agentText sends agent markdown with HTML comments hidden, as the UI does.
+func (t *translator) agentText(kind, id, delta string) []update {
+	f := t.comments[id]
+	if f == nil {
+		f = &commentFilter{}
+		t.comments[id] = f
+	}
+	return chunk(kind, f.write(delta))
+}
+
+// agentFlush sends whatever the message's filter still holds.
+func (t *translator) agentFlush(kind, id string) []update {
+	f := t.comments[id]
+	if f == nil {
+		return nil
+	}
+	delete(t.comments, id)
+	return chunk(kind, f.flush())
+}
+
+func chunk(kind, text string) []update {
+	if text == "" {
+		return nil
+	}
+	return []update{textChunk(kind, text)}
 }
 
 // toolKind guesses ACP.s tool kind from the tool name.

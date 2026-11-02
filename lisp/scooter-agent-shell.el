@@ -30,11 +30,19 @@
 (declare-function scooter-tramp-file-name "scooter-tramp")
 (defvar agent-shell-agent-configs)
 (defvar agent-shell--state)
+(defvar agent-shell-elicitation--experimental-feature-enabled)
 
 (defcustom scooter-acp-command '("scooter" "acp")
   "Command and leading arguments that run the ACP bridge.
 If the command isn't on PATH, `scooter-install-binary' may download it."
   :type '(repeat string)
+  :group 'scooter)
+
+(defcustom scooter-agent-shell-forms t
+  "Non-nil lets Scooter shells answer the agent's questions in a form.
+This turns on agent-shell's experimental elicitation forms in those
+buffers only.  With it off, a question points at the web UI instead."
+  :type 'boolean
   :group 'scooter)
 
 (defcustom scooter-emacsclient-program
@@ -89,6 +97,10 @@ TITLE names the buffer; PROJECT is as in `scooter-acp-arguments'."
      :shell-prompt-regexp "Scooter> "
      :client-maker
      (lambda (buffer)
+       (when scooter-agent-shell-forms
+         ;; Read when agent-shell sends initialize, after this runs.
+         (with-current-buffer buffer
+           (setq-local agent-shell-elicitation--experimental-feature-enabled t)))
        (agent-shell--make-acp-client
         :command (scooter-install-program (car scooter-acp-command))
         :command-params (scooter-acp-arguments server :project project)

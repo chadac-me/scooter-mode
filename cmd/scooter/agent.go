@@ -32,6 +32,7 @@ type agent struct {
 	mu       sync.Mutex
 	sessions map[string]*session
 	attached bool
+	forms    bool // the client advertised elicitation forms
 }
 
 func newAgent(ctx context.Context, c *client, out *rpc, opts agentOptions) *agent {
@@ -50,6 +51,16 @@ func wrap(err error) error {
 func (a *agent) handle(ctx context.Context, method string, params json.RawMessage) (any, func(), error) {
 	switch method {
 	case "initialize":
+		var p struct {
+			ClientCapabilities struct {
+				Elicitation map[string]json.RawMessage `json:"elicitation"`
+			} `json:"clientCapabilities"`
+		}
+		_ = json.Unmarshal(params, &p)
+		_, forms := p.ClientCapabilities.Elicitation["form"]
+		a.mu.Lock()
+		a.forms = forms
+		a.mu.Unlock()
 		if err := a.probe(ctx); err != nil {
 			return nil, nil, wrap(err)
 		}
@@ -174,6 +185,8 @@ func (a *agent) open(id string) *session {
 		return s
 	}
 	s := newSession(id, a.c, a.out)
+	s.forms = a.forms
+	s.approveURL = a.c.base + "/chat/" + url.PathEscape(id)
 	if a.opts.self {
 		s.approveURL = a.opts.approveURL
 		s.noAnswer = true

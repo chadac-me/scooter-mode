@@ -33,6 +33,9 @@ type interrupt struct {
 	ToolCallID string `json:"toolCallId"`
 	Metadata   struct {
 		Options []permissionOption `json:"options"`
+		// Kind picks the renderer for Data, e.g. "aws.permissions".
+		Kind string          `json:"kind"`
+		Data json.RawMessage `json:"data"`
 	} `json:"metadata"`
 }
 

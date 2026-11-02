@@ -232,12 +232,10 @@
 
 (ert-deftest scooter-test-list-header-matches-columns ()
   (scooter-test-with-list (list '((id . "a") (title . "T") (model . "m1") (owner . "me@x")))
-    (let ((header (substring-no-properties header-line-format 1)))
-      (dolist (label '("Title" "State" "Model" "Links" "Owner" "Active"))
-        (should (string-match-p label header)))
-      (goto-char (point-min))
-      (search-forward "m1")
-      (should (= (- (current-column) 2) (string-match "Model" header))))))
+    (should (string-match-p "\\`home  https://s.example  1 conversation\n +Title +State +Model +Links +Owner +Active\n"
+                            (buffer-string)))
+    (cl-flet ((col (re) (goto-char (point-min)) (re-search-forward re) (goto-char (match-beginning 0)) (current-column)))
+      (should (= (col "Model") (col "m1"))))))
 
 (ert-deftest scooter-test-list-link-labels ()
   (should (equal (scooter-list--col-links
@@ -263,7 +261,7 @@
             '((id . "b") (title . "Run") (runStartedAt . 1))
             '((id . "c") (title . "Boom") (status . "failed") (starred . t)))
     (cl-flet ((face-at (text) (goto-char (point-min)) (search-forward text)
-                (get-text-property (match-beginning 0) 'face)))
+                (get-text-property (match-beginning 0) 'font-lock-face)))
       (should (eq (face-at "Awaiting you") 'scooter-list-awaiting))
       (should (eq (face-at "Running") 'scooter-list-running))
       (should (eq (face-at "Failed") 'scooter-list-failed))

@@ -6,8 +6,8 @@
 ;;; Commentary:
 
 ;; `scooter-list' shows each server's conversations as a table of
-;; `magit-section's, grouped by status, with column names in the header
-;; line.  Each row folds open to the conversation's details.  The list
+;; `magit-section's, grouped by status, under a row of column names per
+;; server.  Each row folds open to the conversation's details.  The list
 ;; refreshes when /conversations/events reports a change.
 
 ;;; Code:
@@ -39,7 +39,7 @@
   "Face for the \"Failed\" heading."
   :group 'scooter)
 
-(defface scooter-list-star '((t :inherit font-lock-constant-face))
+(defface scooter-list-star '((t :inherit warning))
   "Face for the star on starred conversations."
   :group 'scooter)
 
@@ -51,8 +51,12 @@
   "Face for secondary columns."
   :group 'scooter)
 
-(defface scooter-list-header '((t :inherit bold))
-  "Face for the column names in the header line."
+(defface scooter-list-server '((t :inherit (magit-section-heading bold) :height 1.15))
+  "Face for server names."
+  :group 'scooter)
+
+(defface scooter-list-header '((t :inherit (bold shadow) :underline t))
+  "Face for the row of column names under each server."
   :group 'scooter)
 
 (defface scooter-list-link '((t :inherit link :underline nil))
@@ -231,20 +235,19 @@ The space is a display stop, so columns align in proportional fonts too."
                                 scooter-list--columns))))
 
 (defun scooter-list--header ()
-  "Return the header line naming each column."
-  (concat (propertize " " 'display '(space :align-to 0))
-          (propertize (scooter-list--cells (mapcar #'car scooter-list--columns))
-                      'face 'scooter-list-header)))
+  "Return the row naming each column."
+  (propertize (string-trim-right (scooter-list--cells (mapcar #'car scooter-list--columns)))
+              'font-lock-face 'scooter-list-header))
 
 (defun scooter-list--col-star (conv)
   "Star cell for CONV."
-  (if (eq (alist-get 'starred conv) t) (propertize "★" 'face 'scooter-list-star) ""))
+  (if (eq (alist-get 'starred conv) t) (propertize "★" 'font-lock-face 'scooter-list-star) ""))
 
 (defun scooter-list--col-title (conv)
   "Title cell for CONV, falling back to its short id."
   (let ((title (alist-get 'title conv)))
     (if (and title (not (string-empty-p title))) title
-      (propertize (scooter-slug nil (alist-get 'id conv)) 'face 'scooter-list-dim))))
+      (propertize (scooter-slug nil (alist-get 'id conv)) 'font-lock-face 'scooter-list-dim))))
 
 (defun scooter-list--state (conv)
   "Return CONV's state, with how long it has held when known."
@@ -260,13 +263,14 @@ The space is a display stop, so columns align in proportional fonts too."
   "State cell for CONV, in its group's face."
   (let ((face (nth 2 (assq (scooter-list-group conv) scooter-list--groups))))
     (propertize (scooter-list--state conv)
-                'face (if (eq face 'scooter-list-status) 'default face))))
+                'font-lock-face (if (eq face 'scooter-list-status) 'default
+                                  `(:inherit ,face :weight normal)))))
 
 (defun scooter-list--col-model (conv)
   "Model cell for CONV."
   (if-let* ((model (alist-get 'model conv)))
-      (propertize model 'face 'scooter-list-model)
-    (propertize "(default)" 'face 'scooter-list-dim)))
+      (propertize model 'font-lock-face 'scooter-list-model)
+    (propertize "(default)" 'font-lock-face 'scooter-list-dim)))
 
 (defun scooter-list--link-label (link)
   "Short label for LINK: a PR or issue number, else its source."
@@ -285,16 +289,16 @@ The space is a display stop, so columns align in proportional fonts too."
   (propertize (string-join (delete-dups (delq nil (mapcar #'scooter-list--link-label
                                                           (scooter-list--links conv))))
                            " ")
-              'face 'scooter-list-link))
+              'font-lock-face 'scooter-list-link))
 
 (defun scooter-list--col-owner (conv)
   "Owner cell for CONV, its user part when an email."
   (propertize (car (split-string (or (alist-get 'owner conv) "") "@"))
-              'face 'scooter-list-dim))
+              'font-lock-face 'scooter-list-dim))
 
 (defun scooter-list--col-active (conv)
   "Last-activity cell for CONV."
-  (propertize (scooter-list--age (alist-get 'lastActivityAt conv)) 'face 'scooter-list-dim))
+  (propertize (scooter-list--age (alist-get 'lastActivityAt conv)) 'font-lock-face 'scooter-list-dim))
 
 (defun scooter-list--date (ms)
   "Format epoch MS as a local date and time."
@@ -306,7 +310,7 @@ Insert nothing when the last field is empty."
   (let ((value (car (last fields))))
     (unless (string-empty-p (or value ""))
       (let ((line (scooter-list--pad-to "" 5)))
-        (cl-loop for text in (cons (propertize label 'face 'scooter-list-dim) (butlast fields))
+        (cl-loop for text in (cons (propertize label 'font-lock-face 'scooter-list-dim) (butlast fields))
                  for col in '(16 26 42)
                  do (setq line (scooter-list--pad-to (concat line text) col)))
         (insert line value "\n")))))
@@ -315,7 +319,7 @@ Insert nothing when the last field is empty."
   "Insert CONV's details, shown when its row on SERVER is expanded."
   (let ((created (alist-get 'createdAt conv))
         (label "links"))
-    (scooter-list--insert-detail "id" (alist-get 'id conv))
+    (scooter-list--insert-detail "id" (propertize (alist-get 'id conv) 'font-lock-face 'scooter-list-model))
     (scooter-list--insert-detail "title" (alist-get 'title conv))
     (when (numberp created)
       (let ((age (scooter-list--age created)))
@@ -331,12 +335,14 @@ Insert nothing when the last field is empty."
             (source (alist-get 'source link)))
         (scooter-list--insert-detail
          label (or source "") (or (alist-get 'resourceType link) "")
-         (string-join (delq nil (list (unless (equal short source) short)
+         (string-join (delq nil (list (and (not (equal short source))
+                                           (propertize short 'font-lock-face 'scooter-list-link))
                                       (or (alist-get 'title link) (alist-get 'url link))))
                       " ")))
       (setq label ""))
     (scooter-list--insert-detail
-     "url" (scooter-server-url server (format "/chat/%s" (alist-get 'id conv))))))
+     "url" (propertize (scooter-server-url server (format "/chat/%s" (alist-get 'id conv)))
+                       'font-lock-face 'link))))
 
 (defun scooter-list--insert-conversation (server conv)
   "Insert one row for CONV on SERVER, its details folded beneath."
@@ -350,25 +356,25 @@ Insert nothing when the last field is empty."
   (let ((inhibit-read-only t)
         (pos (point)))
     (setq scooter-list--data data
-          scooter-list--title-width (scooter-list--title-width)
-          header-line-format (scooter-list--header))
+          scooter-list--title-width (scooter-list--title-width))
     (erase-buffer)
     (magit-insert-section (root)
       (pcase-dolist (`(,server . ,convs) data)
         (magit-insert-section (scooter-server-section server)
           (magit-insert-heading
-            (propertize (format "%s" server) 'face 'magit-section-heading)
-            (propertize (format "  %s" (scooter-server-url server)) 'face 'scooter-list-dim)
+            (propertize (format "%s" server) 'font-lock-face 'scooter-list-server)
+            (propertize (format "  %s" (scooter-server-url server)) 'font-lock-face 'scooter-list-dim)
             (propertize (if (stringp convs) "  unreachable"
-                          (format "  %d conversations" (length convs)))
-                        'face 'scooter-list-dim))
+                          (format "  %d conversation%s" (length convs) (if (= (length convs) 1) "" "s")))
+                        'font-lock-face 'scooter-list-dim))
           (if (stringp convs)
-              (insert "  " (propertize convs 'face 'error) "\n")
+              (insert "  " (propertize convs 'font-lock-face 'error) "\n")
+            (insert (scooter-list--header) "\n")
             (pcase-dolist (`(,group ,label ,face) scooter-list--groups)
               (when-let* ((members (seq-filter (lambda (c) (eq (scooter-list-group c) group)) convs)))
                 (magit-insert-section (scooter-group-section group (memq group '(suspended failed)))
                   (magit-insert-heading
-                    (propertize (format "%s (%d)" label (length members)) 'face face))
+                    (propertize (format "%s (%d)" label (length members)) 'font-lock-face face))
                   (dolist (c members) (scooter-list--insert-conversation server c))))))
           (insert "\n"))))
     (goto-char (min pos (point-max)))))

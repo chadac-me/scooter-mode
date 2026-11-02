@@ -26,9 +26,9 @@ the `scooter` binary on `PATH` (`nix profile install github:chadac-me/scooter-mo
                           :client-id "scooter-emacs"))))
 ```
 
-- `C-c s l` lists conversations on every server as a table (title, state,
-  model, links, owner, last activity), grouped by status. `TAB` on a row
-  shows its details (id, created, linked PRs and threads, URL). `RET`
+- `C-c s l` lists conversations on every server as a table (status icon,
+  title, model, links, owner, last activity), starred ones first. Hover an
+  icon for what it means; `TAB` on a row shows its details (id, created, linked PRs and threads, URL). `RET`
   opens one in agent-shell; `c` new, `s` star, `t` retitle, `k` stop the run,
   `z` suspend, `f` files viewer, `b` browser, `g` refresh, `?` menu.
   Shells are named `Scooter <slug>@<server>`; a new conversation's shell

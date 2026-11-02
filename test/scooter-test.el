@@ -13,12 +13,12 @@
   (should (equal (scooter-slug "" "abc") "abc"))
   (should (<= (length (scooter-slug (make-string 60 ?a) "x")) 40)))
 
-(ert-deftest scooter-test-groups ()
-  (should (eq (scooter-list-group '((status . "running") (awaitingInputAt . 5) (runStartedAt . 1))) 'awaiting))
-  (should (eq (scooter-list-group '((status . "running") (runStartedAt . 1))) 'running))
-  (should (eq (scooter-list-group '((status . "running"))) 'idle))
-  (should (eq (scooter-list-group '((status . "suspended"))) 'suspended))
-  (should (eq (scooter-list-group '((status . "failed"))) 'failed)))
+(ert-deftest scooter-test-status ()
+  (should (eq (scooter-list-status '((status . "running") (awaitingInputAt . 5) (runStartedAt . 1))) 'awaiting))
+  (should (eq (scooter-list-status '((status . "running") (runStartedAt . 1))) 'running))
+  (should (eq (scooter-list-status '((status . "running"))) 'idle))
+  (should (eq (scooter-list-status '((status . "suspended") (runStartedAt . 1))) 'suspended))
+  (should (eq (scooter-list-status '((status . "failed") (awaitingInputAt . 5))) 'failed)))
 
 (ert-deftest scooter-test-auth-wall ()
   (should (scooter-http-auth-wall-p 401 "application/json"))
@@ -204,8 +204,8 @@
       (with-temp-buffer
         (let ((rc (call-process "emacs" nil t nil "-Q" "--batch" "--eval" (prin1-to-string form))))
           (should (= rc 0))
-          (should (string-match-p "^Running (1)\n★  Fix login +running [0-9]+d m1 .* [0-9]+d$" (buffer-string)))
-          (should (string-match-p "^Suspended (1)$" (buffer-string)))
+          (should (string-match-p "^★ Starred (1)\n● Fix login +m1 .* [0-9]+d$" (buffer-string)))
+          (should (string-match-p "^Recent (1)\n○ 01234567 " (buffer-string)))
           (should-not (string-match-p "void" (buffer-string))))))))
 
 (defmacro scooter-test-with-list (convs &rest body)
@@ -225,14 +225,14 @@
         (list `((id . "a") (title . "Short") (starred . t) (runStartedAt . 1) (lastActivityAt . ,(- now 540000)))
               `((id . "b") (title . "A much longer conversation title") (model . "m2") (runStartedAt . 1)
                 (lastActivityAt . ,(- now 7200000))))
-      (should (string-match-p "^★  Short +running .* 9m$" (buffer-string)))
+      (should (string-match-p "^● Short +.* 9m$" (buffer-string)))
       (let ((cols (mapcar (lambda (re) (goto-char (point-min)) (re-search-forward re) (current-column))
                           '(" 9m" " 2h"))))
         (should (apply #'= cols))))))
 
 (ert-deftest scooter-test-list-header-matches-columns ()
   (scooter-test-with-list (list '((id . "a") (title . "T") (model . "m1") (owner . "me@x")))
-    (should (string-match-p "\\`home  https://s.example  1 conversation\n +Title +State +Model +Links +Owner +Active\n"
+    (should (string-match-p "\\`home  https://s.example  1 conversation\n +Title +Model +Links +Owner +Active\n"
                             (buffer-string)))
     (cl-flet ((col (re) (goto-char (point-min)) (re-search-forward re) (goto-char (match-beginning 0)) (current-column)))
       (should (= (col "Model") (col "m1"))))))
@@ -245,9 +245,9 @@
   (should (equal (scooter-list--col-links '((sources "jira"))) "jira")))
 
 (ert-deftest scooter-test-list-details-fold-and-persist ()
-  (scooter-test-with-list (list '((id . "conv-1") (title . "T") (owner . "me@x")))
+  (scooter-test-with-list (list '((id . "conv-1") (title . "Topic") (owner . "me@x")))
     (goto-char (point-min))
-    (search-forward "T ")
+    (search-forward "Topic")
     (should (oref (magit-current-section) hidden))
     (magit-section-show (magit-current-section))
     (should (string-match-p "^ +id +conv-1$" (buffer-string)))
@@ -255,17 +255,28 @@
     (scooter-list-refresh)
     (should (string-match-p "^ +id +conv-1$" (buffer-string)))))
 
-(ert-deftest scooter-test-list-faces ()
+(ert-deftest scooter-test-list-status-icons ()
   (scooter-test-with-list
       (list '((id . "a") (title . "Wait") (awaitingInputAt . 1) (model . "m1"))
             '((id . "b") (title . "Run") (runStartedAt . 1))
             '((id . "c") (title . "Boom") (status . "failed") (starred . t)))
-    (cl-flet ((face-at (text) (goto-char (point-min)) (search-forward text)
-                (get-text-property (match-beginning 0) 'font-lock-face)))
-      (should (eq (face-at "Awaiting you") 'scooter-list-awaiting))
-      (should (eq (face-at "Running") 'scooter-list-running))
-      (should (eq (face-at "Failed") 'scooter-list-failed))
-      (should (eq (face-at "m1") 'scooter-list-model)))))
+    (cl-flet ((icon (title) (goto-char (point-min)) (search-forward title) (char-after (pos-bol))))
+      (should (equal (string (icon "Wait")) "!"))
+      (should (eq (get-text-property (pos-bol) 'font-lock-face) 'scooter-list-awaiting))
+      (should (string-prefix-p "Waiting on you for " (get-text-property (pos-bol) 'help-echo)))
+      (icon "Run")
+      (should (eq (get-text-property (pos-bol) 'font-lock-face) 'scooter-list-running))
+      (should (string-match-p "\\`Agent working.*\nA turn is in progress\\.\\'"
+                              (get-text-property (pos-bol) 'help-echo)))
+      (icon "m1")
+      (should (eq (get-text-property (1- (point)) 'font-lock-face) 'scooter-list-model)))))
+
+(ert-deftest scooter-test-list-starred-first ()
+  (scooter-test-with-list
+      (list '((id . "a") (title . "Newest"))
+            '((id . "b") (title . "Older") (starred . t)))
+    (cl-flet ((pos (text) (string-search text (buffer-string))))
+      (should (< (pos "★ Starred (1)\n● Older") (pos "Recent (1)\n● Newest"))))))
 
 (ert-deftest scooter-test-list-shows-fetch-errors ()
   (scooter-test-with-list "Scooter[home]: login required"

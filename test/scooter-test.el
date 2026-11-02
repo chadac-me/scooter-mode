@@ -204,7 +204,7 @@
       (with-temp-buffer
         (let ((rc (call-process "emacs" nil t nil "-Q" "--batch" "--eval" (prin1-to-string form))))
           (should (= rc 0))
-          (should (string-match-p "^Running (1)\n★ fix-login +[0-9]+d  m1$" (buffer-string)))
+          (should (string-match-p "^Running (1)\n★  Fix login +running [0-9]+d m1 .* [0-9]+d$" (buffer-string)))
           (should (string-match-p "^Suspended (1)$" (buffer-string)))
           (should-not (string-match-p "void" (buffer-string))))))))
 
@@ -225,10 +225,37 @@
         (list `((id . "a") (title . "Short") (starred . t) (runStartedAt . 1) (lastActivityAt . ,(- now 540000)))
               `((id . "b") (title . "A much longer conversation title") (model . "m2") (runStartedAt . 1)
                 (lastActivityAt . ,(- now 7200000))))
-      (should (string-match-p "^★ short +9m$" (buffer-string)))
+      (should (string-match-p "^★  Short +running .* 9m$" (buffer-string)))
       (let ((cols (mapcar (lambda (re) (goto-char (point-min)) (re-search-forward re) (current-column))
-                          '("9m" "2h"))))
+                          '(" 9m" " 2h"))))
         (should (apply #'= cols))))))
+
+(ert-deftest scooter-test-list-header-matches-columns ()
+  (scooter-test-with-list (list '((id . "a") (title . "T") (model . "m1") (owner . "me@x")))
+    (let ((header (substring-no-properties header-line-format 1)))
+      (dolist (label '("Title" "State" "Model" "Links" "Owner" "Active"))
+        (should (string-match-p label header)))
+      (goto-char (point-min))
+      (search-forward "m1")
+      (should (= (- (current-column) 2) (string-match "Model" header))))))
+
+(ert-deftest scooter-test-list-link-labels ()
+  (should (equal (scooter-list--col-links
+                  '((links . [((source . "github") (url . "https://github.com/o/r/pull/12"))
+                              ((source . "slack"))])))
+                 "#12 slack"))
+  (should (equal (scooter-list--col-links '((sources "jira"))) "jira")))
+
+(ert-deftest scooter-test-list-details-fold-and-persist ()
+  (scooter-test-with-list (list '((id . "conv-1") (title . "T") (owner . "me@x")))
+    (goto-char (point-min))
+    (search-forward "T ")
+    (should (oref (magit-current-section) hidden))
+    (magit-section-show (magit-current-section))
+    (should (string-match-p "^ +id +conv-1$" (buffer-string)))
+    (should (string-match-p "^ +url +https://s.example/chat/conv-1$" (buffer-string)))
+    (scooter-list-refresh)
+    (should (string-match-p "^ +id +conv-1$" (buffer-string)))))
 
 (ert-deftest scooter-test-list-faces ()
   (scooter-test-with-list

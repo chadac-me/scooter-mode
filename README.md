@@ -81,7 +81,10 @@ an existing conversation instead. `session/list` returns your top-level
 conversations in the web sidebar's order (starred, then most recently active),
 with their status, star, visibility and linked sources under `_meta.scooter`;
 `session/resume` attaches without replaying history, and `session/close` stops
-following a conversation. Auth headers come from
+following a conversation. Sessions offer a `model` config option from the
+server's `/models`; once you pick one, prompts go through `/agui` with
+`X-Agent-Model`, as the web UI sends them (the conversation's own model needs
+no pick and keeps `/messages`). Auth headers come from
 `--headers-command` (or `--headers-file`), as a JSON object such as
 `{"Authorization": "Bearer …"}` or `{"Cookie": "_oauth2_proxy=…"}`. The command
 is rerun once when the server's auth proxy rejects a request, with `{retry}`

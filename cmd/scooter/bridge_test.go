@@ -31,6 +31,11 @@ type fakeScooter struct {
 	messages chan string
 	// rows is GET /conversations.
 	rows []map[string]any
+	// model is every conversation's own model.
+	model string
+	// prompts are the POST /agui prompts; aguiError fails them before the run.
+	prompts   []aguiPrompt
+	aguiError string
 }
 
 func newFake(t *testing.T) (*fakeScooter, *httptest.Server) {
@@ -77,8 +82,10 @@ func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(200, rows)
 	case r.Method == "POST" && r.URL.Path == "/conversations":
 		writeJSON(201, map[string]any{"id": "c1"})
+	case r.URL.Path == "/models":
+		writeJSON(200, map[string]any{"default": "sonnet", "available": []string{"sonnet", "opus"}})
 	case len(parts) == 2 && parts[0] == "conversations":
-		writeJSON(200, map[string]any{"id": parts[1]})
+		writeJSON(200, map[string]any{"id": parts[1], "model": f.model})
 	case len(parts) >= 3 && parts[2] == "history":
 		f.mu.Lock()
 		sum := strings.Repeat("0", 64)
@@ -122,13 +129,38 @@ func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			ThreadID string `json:"threadId"`
 			Resume   []resumeEntry
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+			Priority int `json:"priority"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Resume) != 1 {
-			f.t.Errorf("resume: %v %+v", err, body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || (len(body.Resume) != 1 && len(body.Messages) != 1) {
+			f.t.Errorf("agui: %v %+v", err, body)
+			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(200)
-		f.resumes <- body.Resume[0]
+		if len(body.Resume) == 1 {
+			f.resumes <- body.Resume[0]
+			return
+		}
+		p := aguiPrompt{model: r.Header.Get("X-Agent-Model"), content: body.Messages[0].Content, priority: body.Priority}
+		f.mu.Lock()
+		f.prompts = append(f.prompts, p)
+		runErr := f.aguiError
+		f.mu.Unlock()
+		if runErr != "" {
+			fmt.Fprintf(w, "data: {\"type\":\"RUN_ERROR\",\"message\":%q}\n\n", runErr)
+			return
+		}
+		var text string
+		if json.Unmarshal(p.content, &text) != nil {
+			text = string(p.content)
+		}
+		if f.onMessage != nil {
+			go f.onMessage(f, text)
+		}
 	case len(parts) >= 3 && parts[2] == "cancel":
 		writeJSON(202, map[string]any{"ok": true})
 		f.cancels <- struct{}{}
@@ -503,4 +535,11 @@ func TestBearerFileRereadOnReload(t *testing.T) {
 	if got, _ := h.load(context.Background(), true); got["Authorization"] != "Bearer two" {
 		t.Errorf("reload = %v", got)
 	}
+}
+
+// aguiPrompt is one prompt posted to /agui.
+type aguiPrompt struct {
+	model    string
+	content  json.RawMessage
+	priority int
 }

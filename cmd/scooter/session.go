@@ -44,6 +44,10 @@ type session struct {
 	prefix     string               // prepended to the first prompt
 	model      string               // the picked model, sent with each prompt
 	convModel  string               // the model the conversation was created with
+	live       bool                 // attached: runs from elsewhere arrive as session/push
+	running    bool                 // an agent run is in flight, whoever started it
+	pushing    bool                 // a session/push is open for a run from elsewhere
+	pushDone   func(context.Context, any) error
 
 	approveURL string      // the web UI page that answers requests
 	noAnswer   bool        // the server refuses permission answers from us
@@ -99,15 +103,6 @@ func (s *session) applyNew(ctx context.Context, h history, send bool) {
 	s.held = h.Checksum
 }
 
-// replayPending raises permission requests left open in history.
-func (s *session) replayPending(ctx context.Context) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, in := range s.pending {
-		s.askLocked(ctx, in)
-	}
-}
-
 // applyLocked forwards an event and drives the turn; holds mu.
 func (s *session) applyLocked(ctx context.Context, raw json.RawMessage, send, replay bool) {
 	var ev aguiEvent
@@ -116,6 +111,11 @@ func (s *session) applyLocked(ctx context.Context, raw json.RawMessage, send, re
 		return
 	}
 	updates, sig := s.tr.apply(ev)
+	ext := strings.HasPrefix(ev.RunID, "ext-")
+	if send && s.live && s.turn == nil && !s.pushing && ((sig == sigRunStarted && !ext) || hasUserChunk(updates)) {
+		// A run from the web UI or elsewhere; its prompt comes just before it starts.
+		s.startPushLocked()
+	}
 	if send {
 		for _, u := range updates {
 			s.resolveImages(ctx, u)
@@ -143,10 +143,14 @@ func (s *session) applyLocked(ctx context.Context, raw json.RawMessage, send, re
 			}
 		}
 	case sigRunStarted:
+		if !ext {
+			s.running = true
+		}
 		if s.turn != nil {
 			s.turn.started = true
 		}
 	case sigRunEnded:
+		s.runEndedLocked(ext)
 		if t := s.turn; t != nil && t.started && s.queueEmpty {
 			reason := "end_turn"
 			if t.cancelled || ev.Cancelled {
@@ -155,6 +159,7 @@ func (s *session) applyLocked(ctx context.Context, raw json.RawMessage, send, re
 			s.finishLocked(turnResult{stopReason: reason})
 		}
 	case sigRunError:
+		s.runEndedLocked(ext)
 		if t := s.turn; t != nil && t.started && s.queueEmpty {
 			s.finishLocked(turnResult{err: errors.New(ev.Message)})
 		}
@@ -360,6 +365,10 @@ func (s *session) prompt(ctx context.Context, text string, images []any) (string
 	if s.turn != nil {
 		s.mu.Unlock()
 		return "", fmt.Errorf("a prompt is already running in %s", s.id)
+	}
+	if s.pushing {
+		// The client queues prompts during a push, so this one follows it.
+		s.endPushLocked()
 	}
 	t := &turn{done: make(chan turnResult, 1)}
 	s.turn = t

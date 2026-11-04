@@ -226,6 +226,8 @@ func startBridge(t *testing.T, server string, opts agentOptions) *testClient {
 			switch method {
 			case "session/request_permission":
 				return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": tc.choose}}, nil, nil
+			case "session/push":
+				return map[string]any{}, nil, nil
 			case "elicitation/create":
 				if tc.form == nil {
 					return nil, nil, &rpcError{Code: codeInvalidParams, Message: "no forms here"}

@@ -18,6 +18,7 @@ type aguiEvent struct {
 	Source       string          `json:"source"`
 	Text         string          `json:"text"`
 	Cancelled    bool            `json:"cancelled"`
+	RunID        string          `json:"runId"`
 	Outcome      *runOutcome     `json:"outcome"`
 	Items        json.RawMessage `json:"items"`
 	Images       []imageRef      `json:"images"`

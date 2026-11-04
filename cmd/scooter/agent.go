@@ -72,6 +72,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 				"sessionCapabilities": map[string]any{"list": map[string]any{}, "resume": map[string]any{}, "close": map[string]any{}},
 			},
 			"authMethods": []any{},
+			"_meta":       map[string]any{"steering": map[string]any{"supported": true}},
 		}, nil, nil
 	case "session/new":
 		var p struct {
@@ -93,7 +94,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 			return nil, nil, wrap(err)
 		}
 		go s.follow(s.ctx)
-		return a.sessionResult(ctx, s, false), func() { s.replayPending(s.ctx) }, nil
+		return a.sessionResult(ctx, s, false), func() { s.goLive(s.ctx) }, nil
 	case "session/list":
 		res, err := a.listSessions(ctx, params)
 		return res, nil, err
@@ -109,6 +110,9 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 			return map[string]any{}, nil, nil
 		}
 		return a.resumeSession(ctx, p.SessionID)
+	case "_session/steering":
+		res, err := a.steerSession(ctx, params)
+		return res, nil, err
 	case "session/set_config_option", "session/set_model":
 		res, err := a.setModel(ctx, method, params)
 		return res, nil, err
@@ -174,7 +178,7 @@ func (a *agent) newSession(ctx context.Context, cwd string) (any, func(), error)
 				log.Printf("session %s: load: %v", s.id, err)
 			}
 			go s.follow(s.ctx)
-			s.replayPending(s.ctx)
+			s.goLive(s.ctx)
 		}, nil
 	}
 
@@ -196,7 +200,7 @@ func (a *agent) newSession(ctx context.Context, cwd string) (any, func(), error)
 		s.prefix = projectContext(ctx, cwd)
 	}
 	go s.follow(s.ctx)
-	return a.sessionResult(ctx, s, true), nil, nil
+	return a.sessionResult(ctx, s, true), func() { s.goLive(s.ctx) }, nil
 }
 
 // probe checks the server and credentials before any session.

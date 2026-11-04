@@ -84,7 +84,9 @@ with their status, star, visibility and linked sources under `_meta.scooter`;
 following a conversation. Sessions offer a `model` config option from the
 server's `/models`; once you pick one, prompts go through `/agui` with
 `X-Agent-Model`, as the web UI sends them (the conversation's own model needs
-no pick and keeps `/messages`). Auth headers come from
+no pick and keeps `/messages`). Image prompts (png, jpeg, gif, webp, up to 5 MB) go
+through `/agui` too, and images in history and live runs (yours, the agent's,
+and tool results') are fetched from the conversation's assets and inlined. Auth headers come from
 `--headers-command` (or `--headers-file`), as a JSON object such as
 `{"Authorization": "Bearer …"}` or `{"Cookie": "_oauth2_proxy=…"}`. The command
 is rerun once when the server's auth proxy rejects a request, with `{retry}`

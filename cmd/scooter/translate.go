@@ -20,6 +20,7 @@ type aguiEvent struct {
 	Cancelled    bool            `json:"cancelled"`
 	Outcome      *runOutcome     `json:"outcome"`
 	Items        json.RawMessage `json:"items"`
+	Images       []imageRef      `json:"images"`
 }
 
 type runOutcome struct {
@@ -105,7 +106,7 @@ func (t *translator) apply(ev aguiEvent) ([]update, turnSignal) {
 		}
 		return t.agentText("agent_message_chunk", ev.MessageID, ev.Delta), sigNone
 	case "TEXT_MESSAGE_END":
-		delete(t.roles, ev.MessageID)
+		// The role outlives the message: its MESSAGE_IMAGES come after the end.
 		return t.agentFlush("agent_message_chunk", ev.MessageID), sigNone
 	case "REASONING_MESSAGE_CONTENT":
 		return t.agentText("agent_thought_chunk", ev.MessageID, ev.Delta), sigNone
@@ -141,11 +142,21 @@ func (t *translator) apply(ev aguiEvent) ([]update, turnSignal) {
 			"sessionUpdate": "tool_call_update",
 			"toolCallId":    ev.ToolCallID,
 			"status":        "completed",
-			"content": []any{map[string]any{
-				"type":    "content",
-				"content": map[string]any{"type": "text", "text": ev.Content},
-			}},
+			"content":       resultContent(ev.Content),
 		}}, sigNone
+	case "MESSAGE_IMAGES":
+		kind := "agent_message_chunk"
+		if t.roles[ev.MessageID] == "user" {
+			if !t.echoUser {
+				return nil, sigNone
+			}
+			kind = "user_message_chunk"
+		}
+		var out []update
+		for _, ref := range ev.Images {
+			out = append(out, update{"sessionUpdate": kind, "content": imageBlock(ref)})
+		}
+		return out, sigNone
 	}
 	return nil, sigNone
 }
@@ -207,4 +218,21 @@ func toolKind(name string) string {
 		return "think"
 	}
 	return "other"
+}
+
+// resultContent is a tool result as ACP content, its images split out.
+func resultContent(raw string) []any {
+	wrap := func(block map[string]any) any { return map[string]any{"type": "content", "content": block} }
+	text, images, ok := splitResultImages(raw)
+	if !ok {
+		return []any{wrap(map[string]any{"type": "text", "text": raw})}
+	}
+	var out []any
+	if text != "" {
+		out = append(out, wrap(map[string]any{"type": "text", "text": text}))
+	}
+	for _, img := range images {
+		out = append(out, wrap(img))
+	}
+	return out
 }

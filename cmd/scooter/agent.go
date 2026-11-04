@@ -68,7 +68,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 			"protocolVersion": 1,
 			"agentCapabilities": map[string]any{
 				"loadSession":         true,
-				"promptCapabilities":  map[string]any{"image": false, "audio": false, "embeddedContext": true},
+				"promptCapabilities":  map[string]any{"image": !a.opts.self, "audio": false, "embeddedContext": true},
 				"sessionCapabilities": map[string]any{"list": map[string]any{}, "resume": map[string]any{}, "close": map[string]any{}},
 			},
 			"authMethods": []any{},
@@ -124,7 +124,14 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if s == nil {
 			return nil, nil, invalid(fmt.Errorf("unknown session %s", p.SessionID))
 		}
-		reason, err := s.prompt(ctx, promptText(p.Prompt))
+		images, err := promptImages(p.Prompt)
+		if err != nil {
+			return nil, nil, invalid(err)
+		}
+		if len(images) > 0 && a.opts.self {
+			return nil, nil, invalid(errors.New("self-access cannot send images"))
+		}
+		reason, err := s.prompt(ctx, promptText(p.Prompt), images)
 		if err != nil {
 			return nil, nil, wrap(err)
 		}

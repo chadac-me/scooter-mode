@@ -47,6 +47,10 @@ type session struct {
 	noAnswer   bool        // the server refuses permission answers from us
 	forms      bool        // the client renders elicitation forms
 	following  atomic.Bool // one stream per conversation, however often it is opened
+
+	// ctx ends with session/close, stopping the stream and pending requests.
+	ctx  context.Context
+	stop context.CancelFunc
 }
 
 type history struct {

@@ -77,7 +77,11 @@ file instead: `{"url": …, "conversation": …, "headers": {…}}`.
 `scooter acp --server https://scooter.example.org` is an
 [ACP](https://agentclientprotocol.com) agent on stdin/stdout. A new ACP session
 creates a Scooter conversation; `--conversation <id>` attaches the first one to
-an existing conversation instead. Auth headers come from
+an existing conversation instead. `session/list` returns your top-level
+conversations in the web sidebar's order (starred, then most recently active),
+with their status, star, visibility and linked sources under `_meta.scooter`;
+`session/resume` attaches without replaying history, and `session/close` stops
+following a conversation. Auth headers come from
 `--headers-command` (or `--headers-file`), as a JSON object such as
 `{"Authorization": "Bearer …"}` or `{"Cookie": "_oauth2_proxy=…"}`. The command
 is rerun once when the server's auth proxy rejects a request, with `{retry}`

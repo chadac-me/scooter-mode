@@ -205,6 +205,9 @@ func (c *client) send(ctx context.Context, method, rawURL string, body any, extr
 		if err != nil {
 			return nil, err
 		}
+		if strings.HasPrefix(rawURL, c.base+"/") {
+			c.keepRefreshedCookies(resp)
+		}
 		if !isAuthWall(resp) {
 			return resp, nil
 		}
@@ -276,4 +279,51 @@ func sseEach(r io.Reader, fn func([]byte) bool) error {
 		return err
 	}
 	return io.ErrUnexpectedEOF
+}
+
+// keepRefreshedCookies folds the server's Set-Cookie into the Cookie header,
+// so a session oauth2-proxy refreshes stays valid for this process.
+func (c *client) keepRefreshedCookies(resp *http.Response) {
+	set := resp.Cookies()
+	if len(set) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	jar := c.headers["Cookie"]
+	if jar == "" {
+		// Bearer or no auth: the server's cookies are not ours to send.
+		return
+	}
+	var names []string
+	values := map[string]string{}
+	for _, part := range strings.Split(jar, ";") {
+		name, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok || name == "" {
+			continue
+		}
+		if _, dup := values[name]; !dup {
+			names = append(names, name)
+		}
+		values[name] = value
+	}
+	for _, ck := range set {
+		if _, had := values[ck.Name]; !had {
+			names = append(names, ck.Name)
+		}
+		values[ck.Name] = ck.Value
+	}
+	var b strings.Builder
+	for i, name := range names {
+		if i > 0 {
+			b.WriteString("; ")
+		}
+		b.WriteString(name + "=" + values[name])
+	}
+	headers := make(map[string]string, len(c.headers))
+	for k, v := range c.headers {
+		headers[k] = v
+	}
+	headers["Cookie"] = b.String()
+	c.headers = headers
 }

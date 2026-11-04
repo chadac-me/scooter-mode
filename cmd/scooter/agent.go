@@ -93,7 +93,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 			return nil, nil, wrap(err)
 		}
 		go s.follow(s.ctx)
-		return nil, func() { s.replayPending(s.ctx) }, nil
+		return a.sessionResult(ctx, s, false), func() { s.replayPending(s.ctx) }, nil
 	case "session/list":
 		res, err := a.listSessions(ctx, params)
 		return res, nil, err
@@ -109,6 +109,9 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 			return map[string]any{}, nil, nil
 		}
 		return a.resumeSession(ctx, p.SessionID)
+	case "session/set_config_option", "session/set_model":
+		res, err := a.setModel(ctx, method, params)
+		return res, nil, err
 	case "session/prompt":
 		var p struct {
 			SessionID string            `json:"sessionId"`
@@ -159,7 +162,7 @@ func (a *agent) newSession(ctx context.Context, cwd string) (any, func(), error)
 		}
 		s := a.open(a.opts.conversation)
 		// Replay after responding, so the client knows the id.
-		return map[string]any{"sessionId": s.id}, func() {
+		return a.sessionResult(ctx, s, true), func() {
 			if err := s.load(s.ctx, true); err != nil {
 				log.Printf("session %s: load: %v", s.id, err)
 			}
@@ -179,11 +182,14 @@ func (a *agent) newSession(ctx context.Context, cwd string) (any, func(), error)
 		return nil, nil, wrap(err)
 	}
 	s := a.open(conv.ID)
+	s.mu.Lock()
+	s.convModel = a.opts.model
+	s.mu.Unlock()
 	if a.opts.project {
 		s.prefix = projectContext(ctx, cwd)
 	}
 	go s.follow(s.ctx)
-	return map[string]any{"sessionId": s.id}, nil, nil
+	return a.sessionResult(ctx, s, true), nil, nil
 }
 
 // probe checks the server and credentials before any session.

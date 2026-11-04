@@ -162,11 +162,20 @@ func isAuthWall(resp *http.Response) bool {
 
 // do sends a request, reloading headers once on an auth wall.
 func (c *client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
-	return c.doURL(ctx, method, c.base+path, body)
+	return c.send(ctx, method, c.base+path, body, nil)
+}
+
+// doWith is do with extra request headers, such as X-Agent-Model.
+func (c *client) doWith(ctx context.Context, method, path string, body any, extra map[string]string) (*http.Response, error) {
+	return c.send(ctx, method, c.base+path, body, extra)
 }
 
 // doURL is do for an absolute URL, such as a sandbox origin's.
 func (c *client) doURL(ctx context.Context, method, rawURL string, body any) (*http.Response, error) {
+	return c.send(ctx, method, rawURL, body, nil)
+}
+
+func (c *client) send(ctx context.Context, method, rawURL string, body any, extra map[string]string) (*http.Response, error) {
 	var payload []byte
 	if body != nil {
 		var err error
@@ -184,6 +193,9 @@ func (c *client) doURL(ctx context.Context, method, rawURL string, body any) (*h
 			return nil, err
 		}
 		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		for k, v := range extra {
 			req.Header.Set(k, v)
 		}
 		if body != nil {
@@ -234,7 +246,13 @@ func (c *client) stream(ctx context.Context, path string, connected func(), fn f
 		return fmt.Errorf("GET %s: %s", path, resp.Status)
 	}
 	connected()
-	sc := bufio.NewScanner(resp.Body)
+	return sseEach(resp.Body, func(b []byte) bool { fn(b); return true })
+}
+
+// sseEach passes each SSE data payload in r to fn until fn returns false
+// (nil) or r ends (io.ErrUnexpectedEOF).
+func sseEach(r io.Reader, fn func([]byte) bool) error {
+	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 1<<20), 256<<20)
 	var data []byte
 	for sc.Scan() {
@@ -242,7 +260,9 @@ func (c *client) stream(ctx context.Context, path string, connected func(), fn f
 		switch {
 		case len(line) == 0:
 			if len(data) > 0 {
-				fn(data)
+				if !fn(data) {
+					return nil
+				}
 				data = nil
 			}
 		case bytes.HasPrefix(line, []byte("data:")):

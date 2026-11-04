@@ -162,7 +162,7 @@ func (a *agent) resumeSession(ctx context.Context, id string) (any, func(), erro
 		return nil, nil, wrap(err)
 	}
 	go s.follow(s.ctx)
-	return map[string]any{}, func() { s.replayPending(s.ctx) }, nil
+	return a.sessionResult(ctx, s, false), func() { s.replayPending(s.ctx) }, nil
 }
 
 // closeSession stops following a conversation and ends its turn, if any.

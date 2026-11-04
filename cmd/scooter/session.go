@@ -42,6 +42,8 @@ type session struct {
 	pending    map[string]interrupt // unanswered permission requests, by tool call
 	asked      map[string]bool      // permission requests already sent to the client
 	prefix     string               // prepended to the first prompt
+	model      string               // the picked model, sent with each prompt
+	convModel  string               // the model the conversation was created with
 
 	approveURL string      // the web UI page that answers requests
 	noAnswer   bool        // the server refuses permission answers from us
@@ -365,9 +367,17 @@ func (s *session) prompt(ctx context.Context, text string) (string, error) {
 		text = s.prefix + "\n\n" + text
 		s.prefix = ""
 	}
+	model := s.model
 	s.mu.Unlock()
 
-	if err := s.c.call(ctx, "POST", s.path("/messages"), map[string]string{"text": text}, nil); err != nil {
+	var err error
+	if model != "" {
+		// Only /agui carries a model pick.
+		err = s.postAgui(ctx, t, text, model)
+	} else {
+		err = s.c.call(ctx, "POST", s.path("/messages"), map[string]string{"text": text}, nil)
+	}
+	if err != nil {
 		s.mu.Lock()
 		if s.turn == t {
 			s.turn = nil
@@ -397,4 +407,14 @@ func (s *session) cancel(ctx context.Context) {
 	if err := s.c.call(ctx, "POST", s.path("/cancel"), nil, nil); err != nil {
 		log.Printf("session %s: cancel: %v", s.id, err)
 	}
+}
+
+// currentModel is the picked model, else the conversation's own.
+func (s *session) currentModel() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.model != "" {
+		return s.model
+	}
+	return s.convModel
 }

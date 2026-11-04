@@ -162,7 +162,7 @@ func (a *agent) resumeSession(ctx context.Context, id string) (any, func(), erro
 		return nil, nil, wrap(err)
 	}
 	go s.follow(s.ctx)
-	return a.sessionResult(ctx, s, false), func() { s.replayPending(s.ctx) }, nil
+	return a.sessionResult(ctx, s, false), func() { s.goLive(s.ctx) }, nil
 }
 
 // closeSession stops following a conversation and ends its turn, if any.
@@ -176,6 +176,7 @@ func (a *agent) closeSession(id string) {
 	}
 	s.stop()
 	s.mu.Lock()
+	s.endPushLocked()
 	if s.turn != nil {
 		s.finishLocked(turnResult{stopReason: "cancelled"})
 	}

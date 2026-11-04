@@ -73,30 +73,38 @@ func (p *rpc) notify(method string, params any) {
 
 // request sends a request and waits for its result.
 func (p *rpc) request(ctx context.Context, method string, params any, out any) error {
+	return p.start(method, params)(ctx, out)
+}
+
+// start writes a request now and returns a wait for its result, so the
+// caller can order later messages after it without blocking on the answer.
+func (p *rpc) start(method string, params any) func(ctx context.Context, out any) error {
 	id := p.nextID.Add(1)
 	ch := make(chan rpcMsg, 1)
 	p.pmu.Lock()
 	p.pending[id] = ch
 	p.pmu.Unlock()
-	defer func() {
-		p.pmu.Lock()
-		delete(p.pending, id)
-		p.pmu.Unlock()
-	}()
 	b, _ := json.Marshal(params)
 	raw := json.RawMessage(fmt.Sprint(id))
 	p.write(rpcMsg{ID: &raw, Method: method, Params: b})
-	select {
-	case m := <-ch:
-		if m.Error != nil {
-			return m.Error
+	return func(ctx context.Context, out any) error {
+		defer func() {
+			p.pmu.Lock()
+			delete(p.pending, id)
+			p.pmu.Unlock()
+		}()
+		select {
+		case m := <-ch:
+			if m.Error != nil {
+				return m.Error
+			}
+			if out != nil {
+				return json.Unmarshal(m.Result, out)
+			}
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		if out != nil {
-			return json.Unmarshal(m.Result, out)
-		}
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 }
 

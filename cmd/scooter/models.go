@@ -110,9 +110,17 @@ func newID() string {
 // content parts. The run streams back through the integrity log; this only
 // watches the response for a failure before the run starts.
 func (s *session) postAgui(ctx context.Context, t *turn, content any, model string) error {
+	return s.postAguiWith(ctx, t, content, model, 0)
+}
+
+// postAguiWith is postAgui at a queue priority; t may be nil for a steer.
+func (s *session) postAguiWith(ctx context.Context, t *turn, content any, model string, priority int) error {
 	body := map[string]any{
 		"threadId": s.id, "runId": newID(),
 		"messages": []any{map[string]any{"id": newID(), "role": "user", "content": content}},
+	}
+	if priority != 0 {
+		body["priority"] = priority
 	}
 	var extra map[string]string
 	if model != "" {
@@ -139,7 +147,7 @@ func (s *session) postAgui(ctx context.Context, t *turn, content any, model stri
 				return false
 			case "RUN_ERROR":
 				s.mu.Lock()
-				if s.turn == t && !t.started {
+				if t != nil && s.turn == t && !t.started {
 					s.finishLocked(turnResult{err: errors.New(ev.Message)})
 				}
 				s.mu.Unlock()

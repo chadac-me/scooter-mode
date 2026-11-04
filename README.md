@@ -90,7 +90,8 @@ and tool results') are fetched from the conversation's assets and inlined. A run
 started elsewhere (the web UI, a webhook, a schedule) arrives as a
 `session/push`, its prompt included, and ends with `session_push_end`; while
 any run is going, `_session/steering` adds your prompt to it, as the web UI's
-interrupt does. Auth headers come from
+interrupt does. `--replay-turns N` (`scooter-acp-replay-turns` in Emacs) replays
+only the last N turns of a long conversation. Auth headers come from
 `--headers-command` (or `--headers-file`), as a JSON object such as
 `{"Authorization": "Bearer …"}` or `{"Cookie": "_oauth2_proxy=…"}`. The command
 is rerun once when the server's auth proxy rejects a request, with `{retry}`

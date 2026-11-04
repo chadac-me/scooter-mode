@@ -16,6 +16,7 @@ type agentOptions struct {
 	conversation string // attach the first session/new to this id
 	model        string
 	project      bool // describe the cwd's git checkout in the first prompt
+	replayTurns  int  // load replays only the last n user turns; 0 replays all
 	// self: the router's sandbox self-access, which reaches one conversation
 	// and may not answer permissions; approvals point at approveURL instead.
 	self       bool
@@ -219,6 +220,7 @@ func (a *agent) open(id string) *session {
 	}
 	s := newSession(id, a.c, a.out)
 	s.ctx, s.stop = context.WithCancel(a.ctx)
+	s.replayTurns = a.opts.replayTurns
 	s.forms = a.forms
 	s.approveURL = a.c.base + "/chat/" + url.PathEscape(id)
 	if a.opts.self {

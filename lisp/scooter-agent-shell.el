@@ -45,6 +45,12 @@ buffers only.  With it off, a question points at the web UI instead."
   :type 'boolean
   :group 'scooter)
 
+(defcustom scooter-acp-replay-turns nil
+  "When a number N, opening a conversation replays only its last N turns.
+Nil replays all of it."
+  :type '(choice (const :tag "All" nil) natnum)
+  :group 'scooter)
+
 (defcustom scooter-emacsclient-program
   (or (executable-find "emacsclient") "emacsclient")
   "The emacsclient the bridge calls for auth headers."
@@ -73,12 +79,19 @@ buffers only.  With it off, a question points at the web UI instead."
   "Return the bridge arguments for SERVER.
 PROJECT non-nil puts the working directory's git checkout in the first prompt."
   (if (scooter-server-get server :self)
-      (append (cdr scooter-acp-command) '("--self") (and project '("--project")))
+      (append (cdr scooter-acp-command) '("--self") (and project '("--project"))
+              (scooter-agent-shell--replay-args))
     (append (cdr scooter-acp-command)
             (list "--server" (scooter-server-url server))
             (when-let* ((model (scooter-server-get server :model))) (list "--model" model))
             (and project '("--project"))
+            (scooter-agent-shell--replay-args)
             (scooter-agent-shell--headers-args server))))
+
+(defun scooter-agent-shell--replay-args ()
+  "Return the bridge's replay arguments, from `scooter-acp-replay-turns'."
+  (and scooter-acp-replay-turns
+       (list "--replay-turns" (number-to-string scooter-acp-replay-turns))))
 
 (defun scooter-agent-shell-name (server &optional title)
   "Return the agent name for SERVER's shell, showing TITLE when given."

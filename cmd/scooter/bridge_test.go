@@ -29,6 +29,8 @@ type fakeScooter struct {
 	resumes  chan resumeEntry
 	cancels  chan struct{}
 	messages chan string
+	// rows is GET /conversations.
+	rows []map[string]any
 }
 
 func newFake(t *testing.T) (*fakeScooter, *httptest.Server) {
@@ -68,6 +70,11 @@ func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/whoami":
 		writeJSON(200, map[string]any{"id": "me"})
+	case r.Method == "GET" && r.URL.Path == "/conversations":
+		f.mu.Lock()
+		rows := f.rows
+		f.mu.Unlock()
+		writeJSON(200, rows)
 	case r.Method == "POST" && r.URL.Path == "/conversations":
 		writeJSON(201, map[string]any{"id": "c1"})
 	case len(parts) == 2 && parts[0] == "conversations":

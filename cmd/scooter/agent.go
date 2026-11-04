@@ -67,8 +67,9 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		return map[string]any{
 			"protocolVersion": 1,
 			"agentCapabilities": map[string]any{
-				"loadSession":        true,
-				"promptCapabilities": map[string]any{"image": false, "audio": false, "embeddedContext": true},
+				"loadSession":         true,
+				"promptCapabilities":  map[string]any{"image": false, "audio": false, "embeddedContext": true},
+				"sessionCapabilities": map[string]any{"list": map[string]any{}, "resume": map[string]any{}, "close": map[string]any{}},
 			},
 			"authMethods": []any{},
 		}, nil, nil
@@ -91,8 +92,23 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if err := s.load(ctx, true); err != nil {
 			return nil, nil, wrap(err)
 		}
-		go s.follow(a.ctx)
-		return nil, func() { s.replayPending(a.ctx) }, nil
+		go s.follow(s.ctx)
+		return nil, func() { s.replayPending(s.ctx) }, nil
+	case "session/list":
+		res, err := a.listSessions(ctx, params)
+		return res, nil, err
+	case "session/resume", "session/close":
+		var p struct {
+			SessionID string `json:"sessionId"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil || p.SessionID == "" {
+			return nil, nil, invalid(fmt.Errorf("sessionId required"))
+		}
+		if method == "session/close" {
+			a.closeSession(p.SessionID)
+			return map[string]any{}, nil, nil
+		}
+		return a.resumeSession(ctx, p.SessionID)
 	case "session/prompt":
 		var p struct {
 			SessionID string            `json:"sessionId"`
@@ -144,11 +160,11 @@ func (a *agent) newSession(ctx context.Context, cwd string) (any, func(), error)
 		s := a.open(a.opts.conversation)
 		// Replay after responding, so the client knows the id.
 		return map[string]any{"sessionId": s.id}, func() {
-			if err := s.load(a.ctx, true); err != nil {
+			if err := s.load(s.ctx, true); err != nil {
 				log.Printf("session %s: load: %v", s.id, err)
 			}
-			go s.follow(a.ctx)
-			s.replayPending(a.ctx)
+			go s.follow(s.ctx)
+			s.replayPending(s.ctx)
 		}, nil
 	}
 
@@ -166,7 +182,7 @@ func (a *agent) newSession(ctx context.Context, cwd string) (any, func(), error)
 	if a.opts.project {
 		s.prefix = projectContext(ctx, cwd)
 	}
-	go s.follow(a.ctx)
+	go s.follow(s.ctx)
 	return map[string]any{"sessionId": s.id}, nil, nil
 }
 
@@ -185,6 +201,7 @@ func (a *agent) open(id string) *session {
 		return s
 	}
 	s := newSession(id, a.c, a.out)
+	s.ctx, s.stop = context.WithCancel(a.ctx)
 	s.forms = a.forms
 	s.approveURL = a.c.base + "/chat/" + url.PathEscape(id)
 	if a.opts.self {

@@ -598,3 +598,25 @@ func (f *fakeScooter) upsert(row map[string]any) {
 		ch <- b
 	}
 }
+
+func TestRefreshedCookieIsKept(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("Cookie"))
+		if len(seen) == 1 {
+			http.SetCookie(w, &http.Cookie{Name: "_oauth2_proxy", Value: "fresh", Path: "/", HttpOnly: true})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := newClient(srv.URL, headerSource{command: `echo '{"Cookie":"theme=dark; _oauth2_proxy=stale"}'`})
+	for range 2 {
+		if err := c.call(context.Background(), "GET", "/whoami", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if seen[1] != "theme=dark; _oauth2_proxy=fresh" {
+		t.Errorf("second request sent %q", seen[1])
+	}
+}

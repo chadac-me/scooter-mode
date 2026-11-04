@@ -40,6 +40,14 @@ the `scooter` binary on `PATH` (`nix profile install github:chadac-me/scooter-mo
   policy and approvals still needed above Approve/Deny. Commit identity proposals
   show the identity; kinds with no card here show their raw data and the
   web UI link. A request answered in the web UI is withdrawn from the shell.
+- `C-c s b` (`scooter-sandbox`) shows the conversation's sandbox (status,
+  size, visibility) and resizes, suspends or resumes, restarts, compacts,
+  renames, stars or changes its visibility; `C-c s w` opens, copies, starts
+  or stops one of its web services; `C-c s k` opens a linked resource (`C-u`
+  copies its URL). Each acts on the Scooter shell you are in or the row at
+  point in `scooter-list` (`m`, `v`, `l` there), and `C-u` picks another.
+  Links added while a conversation is open, and web services the agent
+  starts, show up as notes in its shell.
 - `C-c s c`, `C-c s r`, `C-c s p` start a conversation from a prompt, the
   region, or the current project; `C-c s R` sends the region to an existing
   one.

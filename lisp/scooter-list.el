@@ -22,6 +22,9 @@
 (declare-function scooter-open "scooter" (server id))
 (declare-function scooter-new "scooter" (server text &optional model))
 (declare-function scooter-dispatch "scooter")
+(declare-function scooter-sandbox "scooter-conversation")
+(declare-function scooter-web-services "scooter-conversation")
+(declare-function scooter-links "scooter-conversation")
 (declare-function evil-set-initial-state "evil-core" (mode state))
 
 (defface scooter-list-awaiting '((t :inherit (warning bold)))
@@ -130,6 +133,9 @@
   "f" #'scooter-list-files
   "w" #'scooter-list-copy-url
   "b" #'scooter-list-browse
+  "m" #'scooter-sandbox
+  "v" #'scooter-web-services
+  "l" #'scooter-links
   "g" #'scooter-list-refresh
   "?" #'scooter-list-dispatch)
 
@@ -150,11 +156,14 @@
     ("s" "Star" scooter-list-star)
     ("t" "Retitle" scooter-list-retitle)
     ("k" "Stop run" scooter-list-cancel)
-    ("z" "Suspend" scooter-list-suspend)]
+    ("z" "Suspend" scooter-list-suspend)
+    ("m" "Sandbox…" scooter-sandbox)
+    ("v" "Web services" scooter-web-services)]
    ["Links"
     ("f" "Files" scooter-list-files)
     ("b" "Browse" scooter-list-browse)
-    ("w" "Copy URL" scooter-list-copy-url)]
+    ("w" "Copy URL" scooter-list-copy-url)
+    ("l" "Linked resources" scooter-links)]
    ["List"
     ("c" "New" scooter-list-new)
     ("g" "Refresh" scooter-list-refresh)

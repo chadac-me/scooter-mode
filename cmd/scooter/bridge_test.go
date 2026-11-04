@@ -38,6 +38,8 @@ type fakeScooter struct {
 	aguiError string
 	// assets are image bytes by path, served with their type.
 	assets map[string][2]string
+	// listSubs follow /conversations/events.
+	listSubs []chan []byte
 }
 
 func newFake(t *testing.T) (*fakeScooter, *httptest.Server) {
@@ -94,6 +96,25 @@ func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(200, rows)
 	case r.Method == "POST" && r.URL.Path == "/conversations":
 		writeJSON(201, map[string]any{"id": "c1"})
+	case r.URL.Path == "/conversations/events":
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		ch := make(chan []byte, 16)
+		f.mu.Lock()
+		snap, _ := json.Marshal(map[string]any{"kind": "snapshot", "conversations": f.rows})
+		f.listSubs = append(f.listSubs, ch)
+		f.mu.Unlock()
+		fmt.Fprintf(w, "data: %s\n\n", snap)
+		w.(http.Flusher).Flush()
+		for {
+			select {
+			case b := <-ch:
+				fmt.Fprintf(w, "data: %s\n\n", b)
+				w.(http.Flusher).Flush()
+			case <-r.Context().Done():
+				return
+			}
+		}
 	case r.URL.Path == "/models":
 		writeJSON(200, map[string]any{"default": "sonnet", "available": []string{"sonnet", "opus"}})
 	case len(parts) == 2 && parts[0] == "conversations":
@@ -566,4 +587,14 @@ type aguiPrompt struct {
 	model    string
 	content  json.RawMessage
 	priority int
+}
+
+// upsert sends a conversation row to the list streams.
+func (f *fakeScooter) upsert(row map[string]any) {
+	b, _ := json.Marshal(map[string]any{"kind": "upsert", "conversation": row})
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, ch := range f.listSubs {
+		ch <- b
+	}
 }

@@ -439,3 +439,76 @@
 
 (provide 'scooter-test)
 ;;; scooter-test.el ends here
+
+;;;; Conversation commands
+
+(defmacro scooter-test-with-requests (replies &rest body)
+  "Run BODY with `scooter-request' answering from REPLIES, an alist of
+\"METHOD PATH\" to reply; bind `calls' to the requests made, oldest first."
+  (declare (indent 1))
+  `(let ((calls nil))
+     (cl-letf (((symbol-function 'scooter-request)
+                (lambda (_server method path &optional body)
+                  (setq calls (append calls (list (list method path body))))
+                  (cdr (assoc (concat method " " path) ,replies)))))
+       ,@body)))
+
+(ert-deftest scooter-test-sandbox-actions ()
+  (require 'scooter-conversation)
+  (let ((conv '((id . "c1") (title . "Fix") (status . "running") (visibility . "private")))
+        (sizes '((sizes (small . t) (large . t)) (default . "small"))))
+    (should (equal (scooter-conversation--actions conv sizes)
+                   '("resize" "suspend" "restart" "compact" "rename" "star" "make shared" "browse" "files")))
+    (should (equal (scooter-conversation--describe conv '((resources (limits (cpu . "2") (memory . "4Gi")))) '((ready . t)))
+                   "Fix: running (ready), private, 2 CPU, 4Gi"))
+    (scooter-test-with-requests nil
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "large"))
+                ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+        (scooter-conversation--run 'home "c1" "resize" conv sizes)
+        (scooter-conversation--run 'home "c1" "unstar" conv sizes)
+        (scooter-conversation--run 'home "c1" "make shared" conv sizes))
+      (should (equal calls '(("PATCH" "/conversations/c1/size" ((size . "large")))
+                             ("PATCH" "/conversations/c1/starred" ((starred . :json-false)))
+                             ("PATCH" "/conversations/c1/visibility" ((visibility . "shared") (confirm . t)))))))))
+
+(ert-deftest scooter-test-sandbox-refuses-while-a-run-goes ()
+  (require 'scooter-conversation)
+  (scooter-test-with-requests nil
+    (dolist (action '("suspend" "restart" "compact"))
+      (should-error (scooter-conversation--run 'home "c1" action '((runStartedAt . 5)) nil) :type 'user-error))
+    (should-not calls)))
+
+(ert-deftest scooter-test-web-services-start-with-absolute-urls ()
+  (require 'scooter-conversation)
+  (let ((scooter-servers '((home :url "https://s.example"))))
+    (scooter-test-with-requests
+        '(("GET /conversations/c1/web-services?refresh=1"
+           (services ((name . "app") (displayName . "App") (running . :false) (url . "/s/c1/app/")))))
+      (cl-letf (((symbol-function 'completing-read) (lambda (_p table &rest _) (caar table)))
+                ((symbol-function 'read-multiple-choice) (lambda (&rest _) '(?s "start"))))
+        (should (equal (alist-get 'url (car (scooter-conversation--services 'home "c1")))
+                       "https://s.example/s/c1/app/"))
+        (scooter-web-services 'home "c1"))
+      (should (equal (car (last calls)) '("POST" "/conversations/c1/web-services/app/start" nil))))))
+
+(ert-deftest scooter-test-links-copy ()
+  (require 'scooter-conversation)
+  (scooter-test-with-requests
+      '(("GET /conversations/c1/links"
+         (links ((source . "github") (resourceType . "pull_request") (url . "https://gh/pr/1"))
+                ((source . "slack") (title . "no url")))))
+    (let ((kill-ring nil))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_p table &rest _)
+                   (should (equal (mapcar #'car table) '("github: pull request")))
+                   (caar table))))
+        (scooter-links 'home "c1" t))
+      (should (equal (car kill-ring) "https://gh/pr/1")))))
+
+(ert-deftest scooter-test-conversation-target-in-the-list ()
+  (require 'scooter-conversation)
+  (cl-letf (((symbol-function 'scooter-agent-shell-conversation) #'ignore)
+            ((symbol-function 'scooter-list--at-point) (lambda () '(home (id . "c9")))))
+    (with-temp-buffer
+      (scooter-list-mode)
+      (should (equal (scooter-conversation-target) '(home "c9"))))))

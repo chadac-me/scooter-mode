@@ -34,6 +34,7 @@ type agent struct {
 	sessions map[string]*session
 	attached bool
 	forms    bool // the client advertised elicitation forms
+	links    sync.Once
 }
 
 func newAgent(ctx context.Context, c *client, out *rpc, opts agentOptions) *agent {
@@ -213,6 +214,9 @@ func (a *agent) probe(ctx context.Context) error {
 }
 
 func (a *agent) open(id string) *session {
+	if !a.opts.self {
+		a.links.Do(func() { go a.watchLinks(a.ctx) })
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if s := a.sessions[id]; s != nil {

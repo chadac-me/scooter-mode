@@ -31,7 +31,7 @@ func main() {
 		return
 	}
 	if len(os.Args) < 2 || os.Args[1] != "acp" {
-		fmt.Fprintln(os.Stderr, "usage: scooter acp --server URL [--conversation ID] [--model M] [--project] [--headers-command CMD | --headers-file PATH]\n       scooter acp --self   (inside a Scooter sandbox: chat with its own conversation)")
+		fmt.Fprintln(os.Stderr, "usage: scooter acp --server URL [--conversation ID] [--model M] [--project] [--replay-turns N] [--headers-command CMD | --headers-file PATH]\n       scooter acp --self   (inside a Scooter sandbox: chat with its own conversation)")
 		os.Exit(2)
 	}
 	fs := flag.NewFlagSet("acp", flag.ExitOnError)
@@ -41,14 +41,15 @@ func main() {
 	project := fs.Bool("project", false, "put the working directory's git remote and branch in the first prompt")
 	headersCmd := fs.String("headers-command", "", "shell command printing the auth headers as a JSON object; {retry} becomes t after an auth wall")
 	headersFile := fs.String("headers-file", "", "file holding the auth headers as a JSON object")
+	replayTurns := fs.Int("replay-turns", 0, "on load, replay only the last N user turns (0: all)")
 	self := fs.Bool("self", false, "use the sandbox's self-access to its own conversation (SCOOTER_SELF_URL, SCOOTER_SELF_TOKEN_PATH, CONVERSATION_ID)")
 	_ = fs.Parse(os.Args[2:]) // ExitOnError: it exits rather than returning one.
 	src := headerSource{command: *headersCmd, file: *headersFile}
-	opts := agentOptions{conversation: *conversation, model: *model, project: *project}
+	opts := agentOptions{conversation: *conversation, model: *model, project: *project, replayTurns: *replayTurns}
 	if *self {
 		*server = os.Getenv("SCOOTER_SELF_URL")
 		src = headerSource{bearer: os.Getenv("SCOOTER_SELF_TOKEN_PATH")}
-		opts = agentOptions{conversation: os.Getenv("CONVERSATION_ID"), self: true, approveURL: os.Getenv("CONVERSATION_URL")}
+		opts = agentOptions{conversation: os.Getenv("CONVERSATION_ID"), self: true, approveURL: os.Getenv("CONVERSATION_URL"), replayTurns: *replayTurns}
 		if *server == "" || src.bearer == "" || opts.conversation == "" {
 			log.Fatal("--self needs SCOOTER_SELF_URL, SCOOTER_SELF_TOKEN_PATH and CONVERSATION_ID")
 		}

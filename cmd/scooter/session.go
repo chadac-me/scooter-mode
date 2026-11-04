@@ -32,22 +32,23 @@ type session struct {
 	c   *client
 	out *rpc
 
-	mu         sync.Mutex
-	tr         *translator
-	held       string // checksum through the last applied event
-	applied    int    // events applied, an index into /history
-	synced     bool   // a live frame has chained onto held since (re)connecting
-	queueEmpty bool
-	turn       *turn
-	pending    map[string]interrupt // unanswered permission requests, by tool call
-	asked      map[string]bool      // permission requests already sent to the client
-	prefix     string               // prepended to the first prompt
-	model      string               // the picked model, sent with each prompt
-	convModel  string               // the model the conversation was created with
-	live       bool                 // attached: runs from elsewhere arrive as session/push
-	running    bool                 // an agent run is in flight, whoever started it
-	pushing    bool                 // a session/push is open for a run from elsewhere
-	pushDone   func(context.Context, any) error
+	mu          sync.Mutex
+	tr          *translator
+	held        string // checksum through the last applied event
+	applied     int    // events applied, an index into /history
+	synced      bool   // a live frame has chained onto held since (re)connecting
+	queueEmpty  bool
+	turn        *turn
+	pending     map[string]interrupt // unanswered permission requests, by tool call
+	asked       map[string]bool      // permission requests already sent to the client
+	prefix      string               // prepended to the first prompt
+	model       string               // the picked model, sent with each prompt
+	convModel   string               // the model the conversation was created with
+	live        bool                 // attached: runs from elsewhere arrive as session/push
+	running     bool                 // an agent run is in flight, whoever started it
+	pushing     bool                 // a session/push is open for a run from elsewhere
+	pushDone    func(context.Context, any) error
+	replayTurns int // replay only the last n user turns; 0 replays all
 
 	approveURL string      // the web UI page that answers requests
 	noAnswer   bool        // the server refuses permission answers from us
@@ -90,8 +91,30 @@ func (s *session) load(ctx context.Context, send bool) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if send && s.replayTurns > 0 {
+		// Older turns still drive state, unsent.
+		from := replayStart(h.Events[min(s.applied, len(h.Events)):], s.replayTurns)
+		quiet := h
+		quiet.Events = h.Events[:min(s.applied, len(h.Events))+from]
+		s.applyNew(ctx, quiet, false)
+	}
 	s.applyNew(ctx, h, send)
 	return nil
+}
+
+// replayStart is the index of the nth-last user turn in events, or 0.
+func replayStart(events []json.RawMessage, n int) int {
+	var starts []int
+	for i, raw := range events {
+		var ev aguiEvent
+		if json.Unmarshal(raw, &ev) == nil && ev.Type == "TEXT_MESSAGE_START" && ev.Role == "user" {
+			starts = append(starts, i)
+		}
+	}
+	if len(starts) <= n {
+		return 0
+	}
+	return starts[len(starts)-n]
 }
 
 // applyNew applies the history events past s.applied. Caller holds mu.

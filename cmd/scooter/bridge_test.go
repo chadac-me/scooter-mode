@@ -36,6 +36,8 @@ type fakeScooter struct {
 	// prompts are the POST /agui prompts; aguiError fails them before the run.
 	prompts   []aguiPrompt
 	aguiError string
+	// assets are image bytes by path, served with their type.
+	assets map[string][2]string
 }
 
 func newFake(t *testing.T) (*fakeScooter, *httptest.Server) {
@@ -75,6 +77,16 @@ func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/whoami":
 		writeJSON(200, map[string]any{"id": "me"})
+	case len(parts) == 4 && parts[2] == "assets":
+		f.mu.Lock()
+		a, ok := f.assets[r.URL.Path]
+		f.mu.Unlock()
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", a[0])
+		_, _ = w.Write([]byte(a[1]))
 	case r.Method == "GET" && r.URL.Path == "/conversations":
 		f.mu.Lock()
 		rows := f.rows

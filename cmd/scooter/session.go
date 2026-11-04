@@ -118,6 +118,7 @@ func (s *session) applyLocked(ctx context.Context, raw json.RawMessage, send, re
 	updates, sig := s.tr.apply(ev)
 	if send {
 		for _, u := range updates {
+			s.resolveImages(ctx, u)
 			s.out.notify("session/update", map[string]any{"sessionId": s.id, "update": u})
 		}
 	}
@@ -354,7 +355,7 @@ func (s *session) onFrame(ctx context.Context, data []byte) {
 }
 
 // prompt sends text and waits for its turn to end.
-func (s *session) prompt(ctx context.Context, text string) (string, error) {
+func (s *session) prompt(ctx context.Context, text string, images []any) (string, error) {
 	s.mu.Lock()
 	if s.turn != nil {
 		s.mu.Unlock()
@@ -371,9 +372,9 @@ func (s *session) prompt(ctx context.Context, text string) (string, error) {
 	s.mu.Unlock()
 
 	var err error
-	if model != "" {
-		// Only /agui carries a model pick.
-		err = s.postAgui(ctx, t, text, model)
+	if model != "" || len(images) > 0 {
+		// Only /agui carries a model pick or images.
+		err = s.postAgui(ctx, t, promptContent(text, images), model)
 	} else {
 		err = s.c.call(ctx, "POST", s.path("/messages"), map[string]string{"text": text}, nil)
 	}

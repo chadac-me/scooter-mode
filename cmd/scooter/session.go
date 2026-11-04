@@ -41,6 +41,7 @@ type session struct {
 	turn        *turn
 	pending     map[string]interrupt // unanswered permission requests, by tool call
 	asked       map[string]bool      // permission requests already sent to the client
+	askIDs      map[string]int64     // the client request still open for each, by interrupt
 	prefix      string               // prepended to the first prompt
 	model       string               // the picked model, sent with each prompt
 	convModel   string               // the model the conversation was created with
@@ -75,7 +76,7 @@ type frame struct {
 func newSession(id string, c *client, out *rpc) *session {
 	return &session{
 		id: id, c: c, out: out, tr: newTranslator(), queueEmpty: true,
-		pending: map[string]interrupt{}, asked: map[string]bool{},
+		pending: map[string]interrupt{}, asked: map[string]bool{}, askIDs: map[string]int64{},
 	}
 }
 
@@ -154,7 +155,7 @@ func (s *session) applyLocked(ctx context.Context, raw json.RawMessage, send, re
 		}
 		s.queueEmpty = len(items) == 0
 	case sigResolved:
-		delete(s.pending, ev.ToolCallID)
+		s.resolvedLocked(ev.ToolCallID)
 	case sigInterrupt:
 		for _, in := range ev.Outcome.Interrupts {
 			if len(in.Metadata.Options) == 0 {
@@ -232,7 +233,7 @@ func (s *session) askPermission(ctx context.Context, in interrupt) {
 	if toolCallID == "" {
 		toolCallID = in.ID
 	}
-	title, body := describe(in)
+	title, body := describe(in, s.approveURL)
 	call := map[string]any{"toolCallId": toolCallID, "title": title}
 	if body != "" {
 		call["content"] = []any{map[string]any{"type": "content", "content": map[string]any{"type": "text", "text": body}}}
@@ -243,12 +244,12 @@ func (s *session) askPermission(ctx context.Context, in interrupt) {
 			OptionID string `json:"optionId"`
 		} `json:"outcome"`
 	}
-	err := s.out.request(ctx, "session/request_permission", map[string]any{
+	still, err := s.askClient(ctx, in, "session/request_permission", map[string]any{
 		"sessionId": s.id,
 		"toolCall":  call,
 		"options":   in.Metadata.Options,
 	}, &res)
-	if err != nil || res.Outcome.Outcome != "selected" {
+	if !still || err != nil || res.Outcome.Outcome != "selected" {
 		return
 	}
 	s.resume(ctx, in.ID, res.Outcome.OptionID, nil)
@@ -269,7 +270,11 @@ func (s *session) askForm(ctx context.Context, in interrupt, qs []question) {
 	if in.ToolCallID != "" {
 		params["toolCallId"] = in.ToolCallID
 	}
-	if err := s.out.request(ctx, "elicitation/create", params, &res); err != nil {
+	still, err := s.askClient(ctx, in, "elicitation/create", params, &res)
+	if !still {
+		return
+	}
+	if err != nil {
 		log.Printf("session %s: ask questions: %v", s.id, err)
 		if ctx.Err() == nil {
 			s.pointAtWebUI(in, qs)
@@ -450,4 +455,37 @@ func (s *session) currentModel() string {
 		return s.model
 	}
 	return s.convModel
+}
+
+// askClient puts in to the client; still is false when it was answered
+// elsewhere meanwhile, so the client's late answer must be dropped.
+func (s *session) askClient(ctx context.Context, in interrupt, method string, params, out any) (still bool, err error) {
+	id, wait := s.out.startID(method, params)
+	s.mu.Lock()
+	s.askIDs[in.ID] = id
+	s.mu.Unlock()
+	err = wait(ctx, out)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.askIDs, in.ID)
+	_, still = s.pending[in.ID]
+	return still, err
+}
+
+// resolvedLocked drops an answered request, withdrawing it from the client
+// when it was answered elsewhere, such as the web UI.
+func (s *session) resolvedLocked(toolCallID string) {
+	for id, in := range s.pending {
+		if id != toolCallID && in.ToolCallID != toolCallID {
+			continue
+		}
+		delete(s.pending, id)
+		if reqID, open := s.askIDs[id]; open {
+			s.out.notify("$/cancel_request", map[string]any{"requestId": reqID})
+			s.out.notify("session/update", map[string]any{"sessionId": s.id, "update": update{
+				"sessionUpdate": "tool_call_update", "toolCallId": toolCallID, "status": "completed",
+				"content": []any{map[string]any{"type": "content", "content": map[string]any{"type": "text", "text": "Answered elsewhere, such as the web UI."}}},
+			}})
+		}
+	}
 }

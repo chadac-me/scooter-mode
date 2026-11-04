@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -10,6 +11,7 @@ import (
 const (
 	kindQuestions = "ask-user.questions"
 	kindAWS       = "aws.permissions"
+	kindCommits   = "commits.identity"
 )
 
 // question is one of Claude's AskUserQuestion questions.
@@ -251,14 +253,52 @@ func awsText(data json.RawMessage) (title, body string) {
 	return title, strings.TrimSpace(b.String())
 }
 
-// describe returns a permission dialog's title and markdown body.
-func describe(in interrupt) (title, body string) {
-	if in.Metadata.Kind == kindAWS {
+// describe returns a permission dialog's title and markdown body; a kind
+// with no card here shows its raw data and points at approveURL.
+func describe(in interrupt, approveURL string) (title, body string) {
+	switch in.Metadata.Kind {
+	case "":
+		return in.Message, ""
+	case kindAWS:
 		if title, body := awsText(in.Metadata.Data); title != "" {
 			return title, body
 		}
+	case kindCommits:
+		if title, body := commitsText(in.Metadata.Data); title != "" {
+			return title, body
+		}
 	}
-	return in.Message, ""
+	return in.Message, rawCard(in.Metadata.Kind, in.Metadata.Data, approveURL)
+}
+
+// commitsText renders a commit identity proposal.
+func commitsText(data json.RawMessage) (title, body string) {
+	var p struct{ Name, Email string }
+	if json.Unmarshal(data, &p) != nil || p.Name == "" || p.Email == "" {
+		return "", ""
+	}
+	return "Use this commit identity?", fmt.Sprintf("`%s <%s>`\n\nApproving withdraws other agents' proposals.", p.Name, p.Email)
+}
+
+// maxRawCard caps the raw data a card without a renderer shows.
+const maxRawCard = 4000
+
+// rawCard shows a request kind this bridge cannot draw.
+func rawCard(kind string, data json.RawMessage, approveURL string) string {
+	var pretty bytes.Buffer
+	if json.Indent(&pretty, data, "", "  ") != nil {
+		pretty.Reset()
+		pretty.Write(data)
+	}
+	raw := pretty.String()
+	if len(raw) > maxRawCard {
+		raw = raw[:maxRawCard] + "\n…"
+	}
+	note := "No Emacs card for `" + kind + "` requests; the web UI shows it in full"
+	if approveURL != "" {
+		note += ": " + approveURL
+	}
+	return note + ".\n\n```json\n" + raw + "\n```"
 }
 
 // prop is one schema property; orderedProps keeps the form's field order.

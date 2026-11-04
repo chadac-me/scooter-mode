@@ -189,6 +189,7 @@ type testClient struct {
 	requests []clientRequest
 	choose   string
 	form     map[string]any // the elicitation/create reply
+	hold     chan struct{}  // when set, permission answers wait for it to close
 }
 
 type clientRequest struct {
@@ -225,6 +226,9 @@ func startBridge(t *testing.T, server string, opts agentOptions) *testClient {
 			tc.mu.Unlock()
 			switch method {
 			case "session/request_permission":
+				if tc.hold != nil {
+					<-tc.hold
+				}
 				return map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": tc.choose}}, nil, nil
 			case "session/push":
 				return map[string]any{}, nil, nil
@@ -236,6 +240,12 @@ func startBridge(t *testing.T, server string, opts agentOptions) *testClient {
 			}
 			return nil, nil, &rpcError{Code: codeMethodNotFound, Message: method}
 		}, func(method string, params json.RawMessage) {
+			if method != "session/update" {
+				tc.mu.Lock()
+				tc.requests = append(tc.requests, clientRequest{method, params})
+				tc.mu.Unlock()
+				return
+			}
 			var p struct{ Update map[string]any }
 			if err := json.Unmarshal(params, &p); err != nil {
 				t.Errorf("update: %v", err)

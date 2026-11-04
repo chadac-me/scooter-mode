@@ -79,6 +79,12 @@ func (p *rpc) request(ctx context.Context, method string, params any, out any) e
 // start writes a request now and returns a wait for its result, so the
 // caller can order later messages after it without blocking on the answer.
 func (p *rpc) start(method string, params any) func(ctx context.Context, out any) error {
+	_, wait := p.startID(method, params)
+	return wait
+}
+
+// startID is start, also returning the request id, which $/cancel_request names.
+func (p *rpc) startID(method string, params any) (int64, func(ctx context.Context, out any) error) {
 	id := p.nextID.Add(1)
 	ch := make(chan rpcMsg, 1)
 	p.pmu.Lock()
@@ -87,7 +93,7 @@ func (p *rpc) start(method string, params any) func(ctx context.Context, out any
 	b, _ := json.Marshal(params)
 	raw := json.RawMessage(fmt.Sprint(id))
 	p.write(rpcMsg{ID: &raw, Method: method, Params: b})
-	return func(ctx context.Context, out any) error {
+	return id, func(ctx context.Context, out any) error {
 		defer func() {
 			p.pmu.Lock()
 			delete(p.pending, id)

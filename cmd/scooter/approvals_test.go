@@ -197,16 +197,57 @@ func TestAWSPermissionShowsGrant(t *testing.T) {
 	}
 }
 
-func TestUnknownKindKeepsMessage(t *testing.T) {
+func TestCardsForOtherKinds(t *testing.T) {
 	in := interrupt{Message: "Pick one"}
-	in.Metadata.Kind = "commits.identity"
-	if title, body := describe(in); title != "Pick one" || body != "" {
-		t.Errorf("describe = %q, %q", title, body)
+	if title, body := describe(in, "https://s.example/chat/c1"); title != "Pick one" || body != "" {
+		t.Errorf("plain request = %q, %q", title, body)
 	}
+	in.Metadata.Kind = kindCommits
+	in.Metadata.Data = json.RawMessage(`{"name":"Ada","email":"ada@example.org"}`)
+	if title, body := describe(in, ""); title != "Use this commit identity?" || !strings.Contains(body, "`Ada <ada@example.org>`") {
+		t.Errorf("commit identity = %q, %q", title, body)
+	}
+	in.Metadata.Kind = "secrets.share"
+	in.Metadata.Data = json.RawMessage(`{"secret":"db","to":"ci"}`)
+	title, body := describe(in, "https://s.example/chat/c1")
+	if title != "Pick one" || !strings.Contains(body, "`secrets.share`") || !strings.Contains(body, "https://s.example/chat/c1") || !strings.Contains(body, `"to": "ci"`) {
+		t.Errorf("unknown kind = %q, %q", title, body)
+	}
+	// A known kind with data it cannot read falls back to the raw card.
 	in.Metadata.Kind = kindAWS
 	in.Metadata.Data = json.RawMessage(`{"account": 3}`)
-	if title, _ := describe(in); title != "Pick one" {
-		t.Errorf("malformed grant title = %q", title)
+	if title, body := describe(in, ""); title != "Pick one" || !strings.Contains(body, `"account": 3`) {
+		t.Errorf("malformed grant = %q, %q", title, body)
+	}
+}
+
+func TestAnsweredInTheWebUIWithdrawsTheDialog(t *testing.T) {
+	f, srv := newFake(t)
+	tc := startBridge(t, srv.URL, agentOptions{})
+	hold := make(chan struct{})
+	tc.hold = hold
+	tc.call(t, "session/resume", map[string]any{"sessionId": "c1"}, nil)
+	waitFor(t, func() bool { f.mu.Lock(); defer f.mu.Unlock(); return len(f.subs) == 1 })
+	f.emit(map[string]any{"type": "RUN_STARTED", "threadId": "c1", "runId": "r1"})
+	f.emit(map[string]any{"type": "RUN_FINISHED", "threadId": "c1", "runId": "r1", "outcome": map[string]any{
+		"type": "interrupt",
+		"interrupts": []any{map[string]any{"id": "t9", "toolCallId": "t9", "message": "Run rm?", "metadata": map[string]any{"options": []any{
+			map[string]any{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+		}}}},
+	}})
+	waitFor(t, func() bool { return tc.count("session/request_permission") == 1 })
+	f.emit(map[string]any{"type": "PERMISSION_RESOLVED", "toolCallId": "t9", "optionId": "allow"})
+	waitFor(t, func() bool { return tc.count("$/cancel_request") == 1 })
+	waitFor(t, func() bool {
+		u := tc.find("tool_call_update")
+		return u != nil && u["toolCallId"] == "t9" && u["status"] == "completed"
+	})
+	// The user's late answer must not resume what the web UI settled.
+	close(hold)
+	select {
+	case r := <-f.resumes:
+		t.Errorf("resumed an answered request: %+v", r)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 

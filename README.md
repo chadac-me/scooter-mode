@@ -37,7 +37,9 @@ the `scooter` binary on `PATH` (`nix profile install github:chadac-me/scooter-mo
   agent-shell form (`scooter-agent-shell-forms`, on by default, turns on
   agent-shell's experimental forms in Scooter shells only; off, they
   point at the web UI). AWS access requests show the account, risk,
-  policy and approvals still needed above Approve/Deny.
+  policy and approvals still needed above Approve/Deny. Commit identity proposals
+  show the identity; kinds with no card here show their raw data and the
+  web UI link. A request answered in the web UI is withdrawn from the shell.
 - `C-c s c`, `C-c s r`, `C-c s p` start a conversation from a prompt, the
   region, or the current project; `C-c s R` sends the region to an existing
   one.

@@ -27,6 +27,9 @@
 (require 'scooter-list)
 (require 'scooter-agent-shell)
 (declare-function scooter-find-file "scooter-tramp")
+(declare-function scooter-sandbox "scooter-conversation")
+(declare-function scooter-web-services "scooter-conversation")
+(declare-function scooter-links "scooter-conversation")
 
 (declare-function agent-shell-start "agent-shell")
 
@@ -128,6 +131,10 @@
     ("o" "Open" scooter-open)
     ("c" "New" scooter-new)
     ("f" "Find file" scooter-find-file)]
+   ["This conversation"
+    ("b" "Sandbox" scooter-sandbox)
+    ("w" "Web services" scooter-web-services)
+    ("k" "Links" scooter-links)]
    ["From here"
     ("r" "New from region" scooter-new-from-region)
     ("R" "Send region" scooter-send-region)
@@ -148,7 +155,10 @@
   "f" #'scooter-find-file
   "r" #'scooter-new-from-region
   "R" #'scooter-send-region
-  "p" #'scooter-new-from-project)
+  "p" #'scooter-new-from-project
+  "b" #'scooter-sandbox
+  "w" #'scooter-web-services
+  "k" #'scooter-links)
 
 (provide 'scooter)
 ;;; scooter.el ends here

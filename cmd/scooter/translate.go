@@ -81,13 +81,14 @@ type translator struct {
 	roles     map[string]string
 	toolArgs  map[string]*strings.Builder
 	toolNames map[string]string
+	toolInput map[string]any
 	comments  map[string]*commentFilter
 	// Off during our prompt: the client already shows its text.
 	echoUser bool
 }
 
 func newTranslator() *translator {
-	return &translator{roles: map[string]string{}, toolArgs: map[string]*strings.Builder{}, toolNames: map[string]string{}, comments: map[string]*commentFilter{}, echoUser: true}
+	return &translator{roles: map[string]string{}, toolArgs: map[string]*strings.Builder{}, toolNames: map[string]string{}, toolInput: map[string]any{}, comments: map[string]*commentFilter{}, echoUser: true}
 }
 
 func (t *translator) apply(ev aguiEvent) ([]update, turnSignal) {
@@ -161,6 +162,7 @@ func (t *translator) apply(ev aguiEvent) ([]update, turnSignal) {
 			var input any
 			if json.Unmarshal([]byte(b.String()), &input) == nil {
 				u["rawInput"] = input
+				t.toolInput[ev.ToolCallID] = input
 				if title := toolTitle(t.toolNames[ev.ToolCallID], input); title != "" {
 					u["title"] = title
 				}
@@ -170,12 +172,14 @@ func (t *translator) apply(ev aguiEvent) ([]update, turnSignal) {
 		}
 		return []update{u}, sigNone
 	case "TOOL_CALL_RESULT":
-		return []update{{
+		notices := serviceNotices(t.toolInput[ev.ToolCallID])
+		delete(t.toolInput, ev.ToolCallID)
+		return append([]update{{
 			"sessionUpdate": "tool_call_update",
 			"toolCallId":    ev.ToolCallID,
 			"status":        "completed",
 			"content":       resultContent(ev.Content),
-		}}, sigNone
+		}}, notices...), sigNone
 	case "MESSAGE_IMAGES":
 		kind := "agent_message_chunk"
 		if t.roles[ev.MessageID] == "user" {

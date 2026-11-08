@@ -410,6 +410,81 @@
         (scooter-agent-shell--enable-files)
         (should-not scooter-agent-shell-files-mode)))))
 
+(defmacro scooter-test--in-shell (&rest body)
+  "Run BODY in a Scooter shell for conversation abc on server home."
+  (declare (indent 0))
+  `(let ((scooter-servers '((home :url "https://s.example"))))
+     (cl-letf (((symbol-function 'scooter-tramp-file-name)
+                (lambda (server id) (format "/scooter:%s@%s:/workspace/" id server))))
+       (with-temp-buffer
+         (setq-local agent-shell--state '((:agent-config (:identifier . scooter-home))
+                                          (:session (:id . "abc"))))
+         (scooter-agent-shell--enable-files)
+         ,@body))))
+
+(defun scooter-test--links ()
+  "Return this buffer's sandbox links as (TEXT PATH LINE COLUMN)."
+  (mapcar (lambda (ov) (cons (buffer-substring-no-properties (overlay-start ov) (overlay-end ov))
+                             (overlay-get ov 'scooter-path)))
+          (sort (seq-filter (lambda (ov) (overlay-get ov 'scooter-path))
+                            (overlays-in (point-min) (point-max)))
+                (lambda (a b) (< (overlay-start a) (overlay-start b))))))
+
+(ert-deftest scooter-test-shell-links-sandbox-paths ()
+  (scooter-test--in-shell
+    ;; Text present when the mode starts, then text streamed in later.
+    (insert "See /workspace/foo.mjs:42 and `/workspace/a/b.txt`.\n")
+    (scooter-agent-shell-files-mode 1)
+    (goto-char (point-max))
+    (insert "wrote /workspace/x.go:3:7, /workspace/y.el#L9; not /home/workspace/z or /workspacefoo.\n")
+    (insert "cd /workspace\n")
+    (should (equal (scooter-test--links)
+                   '(("/workspace/foo.mjs:42" "/workspace/foo.mjs" 42 nil)
+                     ("/workspace/a/b.txt" "/workspace/a/b.txt" nil nil)
+                     ("/workspace/x.go:3:7" "/workspace/x.go" 3 7)
+                     ("/workspace/y.el#L9" "/workspace/y.el" 9 nil)
+                     ("/workspace" "/workspace" nil nil))))))
+
+(ert-deftest scooter-test-shell-link-grows-as-it-streams ()
+  (scooter-test--in-shell
+    (scooter-agent-shell-files-mode 1)
+    (insert "at /workspace/foo.mjs:4")
+    (insert "2 now")
+    (should (equal (scooter-test--links) '(("/workspace/foo.mjs:42" "/workspace/foo.mjs" 42 nil))))
+    (scooter-agent-shell-files-mode -1)
+    (should-not (scooter-test--links))))
+
+(ert-deftest scooter-test-shell-link-opens-the-sandbox-file ()
+  (scooter-test--in-shell
+    (scooter-agent-shell-files-mode 1)
+    (insert "edited /workspace/foo.mjs:42:5 just now")
+    (goto-char (point-min))
+    (search-forward "foo")
+    (should (eq (key-binding (kbd "RET")) #'scooter-agent-shell-open-path-at-point))
+    (let (visited)
+      (cl-letf (((symbol-function 'agent-shell-markdown-visit-file)
+                 (lambda (&rest args) (setq visited args))))
+        (scooter-agent-shell-open-path-at-point))
+      (should (equal visited '(:file "/scooter:abc@home:/workspace/foo.mjs" :line-start 42 :column 5))))
+    (goto-char (point-min))
+    (should-error (scooter-agent-shell-open-path-at-point) :type 'user-error)))
+
+(ert-deftest scooter-test-shell-file-keys ()
+  (scooter-test--in-shell
+    (should (eq (key-binding (kbd "C-c C-f")) #'scooter-agent-shell-find-file))
+    (should (eq (key-binding (kbd "C-c C-j")) #'scooter-agent-shell-dired))
+    (cl-letf (((symbol-function 'dired) #'identity))
+      (should (equal (call-interactively #'scooter-agent-shell-dired) "/scooter:abc@home:/workspace/")))
+    ;; The keymap is the user's to rebind.
+    (keymap-set scooter-agent-shell-files-mode-map "C-c d" #'scooter-agent-shell-dired)
+    (unwind-protect
+        (should (eq (key-binding (kbd "C-c d")) #'scooter-agent-shell-dired))
+      (keymap-unset scooter-agent-shell-files-mode-map "C-c d" t)))
+  (with-temp-buffer
+    (setq-local agent-shell--state '((:agent-config (:identifier . scooter-home))))
+    (let ((scooter-servers '((home :url "https://s.example"))))
+      (should-error (scooter-agent-shell-dired) :type 'user-error))))
+
 (ert-deftest scooter-test-shell-renamed-after-title ()
   (let ((scooter-servers '((home :url "https://s.example")))
         (title nil))

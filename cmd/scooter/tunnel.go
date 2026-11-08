@@ -38,10 +38,7 @@ func runTunnel(ctx context.Context, o tunnelOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := waitForService(ctx, c, base, o); err != nil {
-		return err
-	}
-	ws, err := dialService(ctx, c, base+"/")
+	ws, err := connectService(ctx, c, base, o)
 	if err != nil {
 		return err
 	}
@@ -101,41 +98,130 @@ type serviceStatus struct {
 	Phase   string `json:"phase"`
 }
 
-func waitForService(ctx context.Context, c *client, base string, o tunnelOptions) error {
+// transientError is a failure a sleeping sandbox explains: a gateway
+// error, or no answer at all.  connectService retries these.
+type transientError struct{ err error }
+
+func (e *transientError) Error() string { return e.err.Error() }
+func (e *transientError) Unwrap() error { return e.err }
+
+// connectService waits for the ssh service and opens its WebSocket.  While
+// it doesn't answer, the sandbox is woken: resumed if the conversation
+// isn't running, and its ssh service started.  It retries until o.wait.
+func connectService(ctx context.Context, c *client, base string, o tunnelOptions) (*wsConn, error) {
 	ctx, cancel := context.WithTimeout(ctx, o.wait)
 	defer cancel()
+	w := waker{c: c, conversation: o.conversation, log: o.log}
 	said := ""
+	var last error
 	for {
-		var st serviceStatus
-		resp, err := c.doURL(ctx, http.MethodGet, base+"/__scooter_status", nil)
-		if err != nil {
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return fmt.Errorf("ssh service not ready after %s", o.wait)
-			}
-			return err
-		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		_ = resp.Body.Close()
+		st, err := pollStatus(ctx, c, base)
+		var te *transientError
 		switch {
-		case resp.StatusCode == http.StatusNotFound:
-			return errors.New("no such conversation, or its sandbox has no ssh service (webServices.ssh.enable)")
-		case resp.StatusCode != http.StatusOK:
-			return fmt.Errorf("ssh service status: %s", resp.Status)
+		case ctx.Err() != nil:
+		case errors.As(err, &te):
+			last = err
+		case err != nil:
+			return nil, err
+		case st.Running:
+			ws, err := dialService(ctx, c, base+"/")
+			if err == nil || !isTransientDial(err) {
+				return ws, err
+			}
+			last = err
+		default:
+			if msg := map[string]string{"sandbox": "waking the sandbox", "service": "starting ssh"}[st.Phase]; msg != "" && msg != said {
+				o.log(msg + "...")
+				said = msg
+			}
+			last = errors.New("not running yet")
 		}
-		if err := json.Unmarshal(body, &st); err != nil {
-			return fmt.Errorf("ssh service status: %w", err)
-		}
-		if st.Running {
-			return nil
-		}
-		if msg := map[string]string{"sandbox": "waking the sandbox", "service": "starting ssh"}[st.Phase]; msg != "" && msg != said {
-			o.log(msg + "...")
-			said = msg
+		if ctx.Err() == nil {
+			w.wake(ctx)
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("ssh service not ready after %s", o.wait)
+			if ctxErr := ctx.Err(); errors.Is(ctxErr, context.Canceled) {
+				return nil, ctxErr
+			}
+			return nil, fmt.Errorf("ssh service not ready after %s: %w", o.wait, last)
 		case <-time.After(o.poll):
+		}
+	}
+}
+
+// pollStatus asks the proxy whether the ssh service runs.
+func pollStatus(ctx context.Context, c *client, base string) (serviceStatus, error) {
+	var st serviceStatus
+	resp, err := c.doURL(ctx, http.MethodGet, base+"/__scooter_status", nil)
+	if err != nil {
+		if errors.Is(err, errAuthWall) {
+			return st, err
+		}
+		return st, &transientError{err}
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	_ = resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return st, errors.New("no such conversation, or its sandbox has no ssh service (webServices.ssh.enable)")
+	case resp.StatusCode >= 500:
+		return st, &transientError{fmt.Errorf("ssh service status: %s", resp.Status)}
+	case resp.StatusCode != http.StatusOK:
+		return st, fmt.Errorf("ssh service status: %s", resp.Status)
+	}
+	if err := json.Unmarshal(body, &st); err != nil {
+		return st, fmt.Errorf("ssh service status: %w", err)
+	}
+	return st, nil
+}
+
+// isTransientDial reports a dial failure worth retrying: no connection, or
+// a gateway error while sshd comes up.
+func isTransientDial(err error) bool {
+	var he *handshakeError
+	if errors.As(err, &he) {
+		return he.resp.StatusCode >= 500
+	}
+	return !errors.Is(err, errAuthWall)
+}
+
+// waker resumes a conversation and starts its ssh service, each until the
+// server accepts it once.
+type waker struct {
+	c            *client
+	conversation string
+	log          func(string)
+	resumed      bool
+	started      bool
+	checkFailed  bool
+}
+
+func (w *waker) wake(ctx context.Context) {
+	path := "/conversations/" + url.PathEscape(w.conversation)
+	if !w.resumed {
+		var conv struct {
+			Status string `json:"status"`
+		}
+		if err := w.c.call(ctx, http.MethodGet, path, nil, &conv); err != nil {
+			if !w.checkFailed {
+				w.log("checking the conversation: " + err.Error())
+				w.checkFailed = true
+			}
+		} else if conv.Status == "" || conv.Status == "running" {
+			w.resumed = true
+		} else {
+			// Once: the proxy may be resuming it too.
+			w.resumed = true
+			w.log("resuming the " + conv.Status + " sandbox...")
+			if err := w.c.call(ctx, http.MethodPost, path+"/resume", map[string]any{}, nil); err != nil {
+				w.log("resuming: " + err.Error())
+			}
+		}
+	}
+	if w.resumed && !w.started {
+		if err := w.c.call(ctx, http.MethodPost, path+"/web-services/ssh/start", map[string]any{}, nil); err == nil {
+			w.started = true
 		}
 	}
 }

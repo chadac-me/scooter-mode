@@ -40,6 +40,20 @@ type fakeScooter struct {
 	assets map[string][2]string
 	// listSubs follow /conversations/events.
 	listSubs []chan []byte
+	// resumeDelay holds a resume's RUN_STARTED back, as Scooter does until
+	// the resumed run starts; an answer whose client hangs up first is
+	// dropped and counted in abandoned.
+	resumeDelay time.Duration
+	abandoned   int
+	// refusals turn down the next resumes in order.
+	refusals []refusal
+}
+
+// refusal turns down one resume: with an HTTP status, or else a RUN_ERROR
+// streamed after a 200.
+type refusal struct {
+	status   int
+	runError string
 }
 
 func newFake(t *testing.T) (*fakeScooter, *httptest.Server) {
@@ -172,12 +186,12 @@ func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
 			f.t.Errorf("agui: %v %+v", err, body)
 			return
 		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(200)
 		if len(body.Resume) == 1 {
-			f.resumes <- body.Resume[0]
+			f.serveResume(w, r, body.Resume[0])
 			return
 		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
 		p := aguiPrompt{model: r.Header.Get("X-Agent-Model"), content: body.Messages[0].Content, priority: body.Priority}
 		f.mu.Lock()
 		f.prompts = append(f.prompts, p)
@@ -200,6 +214,46 @@ func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// serveResume takes an answer only once its run starts, as Scooter does.
+func (f *fakeScooter) serveResume(w http.ResponseWriter, r *http.Request, entry resumeEntry) {
+	f.mu.Lock()
+	var no *refusal
+	if len(f.refusals) > 0 {
+		no = &f.refusals[0]
+		f.refusals = f.refusals[1:]
+	}
+	delay := f.resumeDelay
+	f.mu.Unlock()
+	// Read to EOF so the server notices the client hanging up.
+	_, _ = io.Copy(io.Discard, r.Body)
+	if no != nil && no.status != 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(no.status)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "interrupt " + entry.InterruptID + " is not waiting"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(200)
+	w.(http.Flusher).Flush()
+	if no != nil {
+		fmt.Fprintf(w, "data: {\"type\":\"RUN_ERROR\",\"message\":%q}\n\n", no.runError)
+		return
+	}
+	select {
+	case <-time.After(delay):
+	case <-r.Context().Done():
+	}
+	if r.Context().Err() != nil {
+		f.mu.Lock()
+		f.abandoned++
+		f.mu.Unlock()
+		return
+	}
+	f.resumes <- entry
+	fmt.Fprintf(w, "data: {\"type\":\"RUN_STARTED\",\"threadId\":\"c1\",\"runId\":\"r2\"}\n\n")
+	w.(http.Flusher).Flush()
 }
 
 // testClient is an ACP client wired to an in-process agent.

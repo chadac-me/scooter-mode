@@ -142,6 +142,7 @@
    ["Servers"
     ("S" "Default server" scooter-select-server)
     ("L" "Log in" scooter-auth-login)
+    ("B" "Browser sign-in" scooter-auth-browser-login)
     ("C" "Set cookie" scooter-auth-set-cookie)
     ("F" "Forget credentials" scooter-auth-forget)]])
 

@@ -3,6 +3,7 @@
 ;; Run with emacs --batch -l fake-server.el; prints its port, then serves:
 ;; /whoami: JSON when the cookie is "good", else a 302 to the login page.
 ;; /forbidden: Scooter's own JSON 403.
+;; /oauth2/auth: oauth2-proxy's check, 202 for the "good" cookie, else 401.
 ;; /conversations: two conversations; /conversations/events: an empty stream.
 
 (defun fake--reply (conn status ctype body)
@@ -23,6 +24,10 @@
                            (fake--reply conn "200 OK" "text/event-stream" ""))
                           ((string-match-p "\\`[A-Z]+ /forbidden" text)
                            (fake--reply conn "403 Forbidden" "application/json" "{\"error\":\"not your conversation\"}"))
+                          ((string-match-p "\\`GET /oauth2/auth " text)
+                           (fake--reply conn (if (string-match-p "^Cookie: _oauth2_proxy=good\r" text)
+                                                 "202 Accepted" "401 Unauthorized")
+                                        "text/plain" ""))
                           ((string-match-p "^Cookie: _oauth2_proxy=good" text)
                            (fake--reply conn "200 OK" "application/json" "{\"id\":\"me\"}"))
                           (t (process-send-string

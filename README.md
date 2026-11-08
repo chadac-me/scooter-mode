@@ -58,6 +58,46 @@ the `scooter` binary on `PATH` (`nix profile install github:chadac-me/scooter-mo
   `--skip-jwt-bearer-tokens` and accept the client as an extra JWT issuer.
   GitHub issues no ID tokens, so GitHub-backed servers use `cookie`.
 
+### Signing in through Firefox
+
+With `:auth (cookie :browser firefox)` the cookie comes from your own Firefox
+instead of being pasted:
+
+```elisp
+(setq scooter-servers
+      '((home :url "https://scooter.example.org" :auth (cookie :browser firefox))))
+```
+
+When a request needs a cookie (none saved yet, or the saved one was refused),
+Emacs reads `_oauth2_proxy` from the default Firefox profile and checks it
+against the server's `/oauth2/auth`. If Firefox is already signed in, that is
+all; otherwise `<server>/oauth2/start` opens in the browser (`browse-url`) and
+Emacs watches the profile until the new session shows up
+(`scooter-auth-login-timeout`, 5 minutes; `C-g` gives up). Either way the
+cookie is saved to auth-source as with plain `cookie`. `C-c s s B`
+(`scooter-auth-browser-login`) does the same on demand.
+
+- The profile is the one `profiles.ini` makes the default, looked up in
+  `scooter-auth-firefox-directories` (`~/.mozilla/firefox`, the XDG, macOS,
+  Snap and Flatpak locations); set `scooter-auth-firefox-profile` to pick
+  another. `cookies.sqlite` and its WAL are copied before reading, so a
+  running Firefox is fine. Needs Emacs built with sqlite
+  (`(sqlite-available-p)`); without it, or without a profile, you are asked
+  to paste the cookie as before.
+- Cookies for the server's host and its parent domains count (a
+  `--cookie-domain=.example.org` session works), and a session oauth2-proxy
+  split into `_oauth2_proxy_0`, `_1`, … is joined back into one value. The
+  cookie name must be the default `_oauth2_proxy`.
+- Set `browse-url-browser-function` so the sign-in page opens in that same
+  Firefox profile. If the server doesn't serve oauth2-proxy's `/oauth2/auth`,
+  point `scooter-auth-browser-check-path` at a path that answers 2xx only when
+  signed in.
+- One sign-in runs at a time: while Emacs waits, other shells' bridges are
+  told to retry and wait for it, as with the paste prompt.
+- Chromium-based browsers aren't read: their cookies are encrypted with a
+  key from the desktop keyring, and driving one over DevTools needs a
+  WebSocket client Emacs doesn't have built in.
+
 ### Sandbox files over Tramp
 
 `C-c s f` (`scooter-find-file`) opens a file in a conversation's sandbox:

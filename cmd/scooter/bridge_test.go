@@ -40,10 +40,25 @@ type fakeScooter struct {
 	assets map[string][2]string
 	// listSubs follow /conversations/events.
 	listSubs []chan []byte
+	// session, when set, is the only _oauth2_proxy cookie the proxy lets
+	// through; expire replaces it and cuts the open streams.
+	session string
+	cut     chan struct{}
+}
+
+// expire ends the session: only next gets through, and streams drop.
+func (f *fakeScooter) expire(next string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.session = next
+	if f.cut != nil {
+		close(f.cut)
+	}
+	f.cut, f.subs, f.listSubs = make(chan struct{}), nil, nil
 }
 
 func newFake(t *testing.T) (*fakeScooter, *httptest.Server) {
-	f := &fakeScooter{t: t, resumes: make(chan resumeEntry, 4), cancels: make(chan struct{}, 4), messages: make(chan string, 4)}
+	f := &fakeScooter{t: t, resumes: make(chan resumeEntry, 4), cancels: make(chan struct{}, 4), messages: make(chan string, 4), cut: make(chan struct{})}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	return f, srv
@@ -71,6 +86,13 @@ func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(v)
+	}
+	f.mu.Lock()
+	session, cut := f.session, f.cut
+	f.mu.Unlock()
+	if session != "" && r.Header.Get("Cookie") != "_oauth2_proxy="+session {
+		http.Redirect(w, r, "/oauth2/sign_in", http.StatusFound)
+		return
 	}
 	if f.selfOnly && !selfRouteFor(r) {
 		http.Error(w, "not available to sandboxes", http.StatusNotFound)
@@ -111,6 +133,8 @@ func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
 			case b := <-ch:
 				fmt.Fprintf(w, "data: %s\n\n", b)
 				w.(http.Flusher).Flush()
+			case <-cut:
+				return
 			case <-r.Context().Done():
 				return
 			}
@@ -146,6 +170,8 @@ func (f *fakeScooter) serve(w http.ResponseWriter, r *http.Request) {
 				b, _ := json.Marshal(fr)
 				fmt.Fprintf(w, "data: %s\n\n", b)
 				w.(http.Flusher).Flush()
+			case <-cut:
+				return
 			case <-r.Context().Done():
 				return
 			}
@@ -229,6 +255,11 @@ type resumeEntry struct {
 }
 
 func startBridge(t *testing.T, server string, opts agentOptions) *testClient {
+	return startBridgeWith(t, server, opts, headerSource{})
+}
+
+// startBridgeWith is startBridge with auth headers from source.
+func startBridgeWith(t *testing.T, server string, opts agentOptions, source headerSource) *testClient {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	toAgentR, toAgentW := io.Pipe()
@@ -236,7 +267,7 @@ func startBridge(t *testing.T, server string, opts agentOptions) *testClient {
 	t.Cleanup(func() { _ = toAgentW.Close(); _ = toClientW.Close() })
 
 	agentRPC := newRPC(toClientW)
-	a := newAgent(ctx, newClient(server, headerSource{}), agentRPC, opts)
+	a := newAgent(ctx, newClient(server, source), agentRPC, opts)
 	go func() { _ = agentRPC.serve(ctx, toAgentR, a.handle, a.notify) }()
 
 	tc := &testClient{rpc: newRPC(toAgentW), choose: "allow"}

@@ -140,6 +140,53 @@
                 ((symbol-function 'y-or-n-p) #'ignore))
         (should-error (scooter-request 'home "GET" "/whoami") :type 'scooter-auth-wall)))))
 
+(ert-deftest scooter-test-nested-sign-in-does-not-prompt-again ()
+  ;; While one shell's cookie prompt is open, other shells' bridges run
+  ;; emacsclient too; their evals run nested inside the open prompt.  They
+  ;; get "null" (ask again shortly), not a second prompt or an error, and
+  ;; the next ask after the prompt closes gets the new cookie.
+  (let ((scooter-servers '((home :url "https://s.example" :auth cookie)))
+        (scooter-auth--cache (make-hash-table :test #'eq))
+        (asked 0)
+        nested)
+    (cl-letf (((symbol-function 'scooter-auth--secret) #'ignore)
+              ((symbol-function 'scooter-auth--save-secret) #'ignore)
+              ((symbol-function 'y-or-n-p) #'ignore)
+              ((symbol-function 'read-passwd)
+               (lambda (&rest _)
+                 (cl-incf asked)
+                 (when (= asked 1)
+                   (setq nested (list (scooter-auth-headers-json "home" t)
+                                      (scooter-auth-headers-json "home" t)
+                                      (scooter-auth-headers-json "home"))))
+                 "fresh")))
+      (scooter-auth-set-cookie 'home "stale")
+      (should (equal (scooter-auth-headers 'home t) '(("Cookie" . "_oauth2_proxy=fresh"))))
+      (should (= asked 1))
+      (should (equal nested '("null" "null" "null")))
+      (should (equal (scooter-auth-headers-json "home") "{\"Cookie\":\"_oauth2_proxy=fresh\"}"))
+      (should (= asked 1)))))
+
+(ert-deftest scooter-test-nested-elisp-request-during-sign-in-errors ()
+  ;; Emacs's own requests (a list refresh timer) nested in the prompt get a
+  ;; user-error, not a second prompt.
+  (let ((scooter-servers '((home :url "https://s.example" :auth cookie)))
+        (scooter-auth--cache (make-hash-table :test #'eq))
+        (asked 0)
+        nested)
+    (cl-letf (((symbol-function 'scooter-auth--secret) #'ignore)
+              ((symbol-function 'scooter-auth--save-secret) #'ignore)
+              ((symbol-function 'y-or-n-p) #'ignore)
+              ((symbol-function 'read-passwd)
+               (lambda (&rest _)
+                 (cl-incf asked)
+                 (setq nested (condition-case err (scooter-auth-headers 'home)
+                                (user-error (error-message-string err))))
+                 "fresh")))
+      (scooter-auth-headers 'home t)
+      (should (= asked 1))
+      (should (string-match-p "already signing in" nested)))))
+
 (ert-deftest scooter-test-json-403-is-an-error-not-a-wall ()
   (scooter-test-with-fake-server url
     (let ((scooter-servers `((home :url ,url))))

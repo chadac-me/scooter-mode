@@ -53,10 +53,15 @@ RETRY non-nil means the last headers hit the auth wall."
 ;;;###autoload
 (defun scooter-auth-headers-json (server &optional retry)
   "Return SERVER's auth headers as a JSON string, for `scooter acp'.
-RETRY is as in `scooter-auth-headers'."
+RETRY is as in `scooter-auth-headers'.  While a sign-in for SERVER is
+already waiting on the user, return \"null\": the bridge asks again
+shortly instead of opening a second prompt or failing its request."
   (let ((json-encoding-pretty-print nil))
-    (let ((headers (scooter-auth-headers server retry)))
-      (if headers (json-encode headers) "{}"))))
+    (condition-case nil
+        (let ((headers (scooter-auth-headers
+                        server (and retry (not (scooter-auth--get server :signing-in))))))
+          (if headers (json-encode headers) "{}"))
+      (scooter-auth-busy "null"))))
 
 (defun scooter-auth-forget (server)
   "Drop SERVER's cached ID token and cookie; the next request logs in again."
@@ -84,7 +89,22 @@ RETRY is as in `scooter-auth-headers'."
                   (stored (scooter-auth--secret (scooter-server-host server) "_oauth2_proxy")))
         (scooter-auth--put server :cookie stored)
         stored)
-      (scooter-auth-set-cookie server)))
+      (scooter-auth--signing-in server #'scooter-auth-set-cookie)))
+
+(define-error 'scooter-auth-busy "Already signing in" 'user-error)
+
+(defun scooter-auth--signing-in (server sign-in)
+  "Call SIGN-IN with SERVER, refusing to nest a second one.
+Another shell's bridge asking for headers while the prompt is open runs
+inside it (emacsclient is served from the prompt's input loop), so it
+signals `scooter-auth-busy' rather than open a second prompt;
+`scooter-auth-headers-json' turns that into a \"try again\" answer."
+  (when (scooter-auth--get server :signing-in)
+    (signal 'scooter-auth-busy
+            (list (format "Scooter[%s]: already signing in; finish that first" server))))
+  (scooter-auth--put server :signing-in t)
+  (unwind-protect (funcall sign-in server)
+    (scooter-auth--put server :signing-in nil)))
 
 ;;;###autoload
 (defun scooter-auth-set-cookie (server &optional cookie)
@@ -190,7 +210,7 @@ RETRY is as in `scooter-auth-headers'."
     (if (and token (> (scooter-auth--jwt-exp token) (+ (float-time) 60)))
         token
       (or (ignore-errors (scooter-auth--refresh server opts))
-          (scooter-auth-login server)))))
+          (scooter-auth--signing-in server #'scooter-auth-login)))))
 
 (defun scooter-auth--store (server opts reply)
   "Cache the tokens in REPLY for SERVER, persisting the refresh token per OPTS."

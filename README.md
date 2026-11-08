@@ -105,7 +105,14 @@ only the last N turns of a long conversation. Auth headers come from
 `--headers-command` (or `--headers-file`), as a JSON object such as
 `{"Authorization": "Bearer …"}` or `{"Cookie": "_oauth2_proxy=…"}`. The command
 is rerun once when the server's auth proxy rejects a request, with `{retry}`
-in it replaced by `t` (otherwise `nil`).
+in it replaced by `t` (otherwise `nil`): first without it, in case the
+headers already changed, and with it only when they didn't. Requests refused
+at the same time share that one rerun, so an expired session asks you to
+sign in once, then the refused request is retried and the event streams
+reconnect. If the command prints `null`, a sign-in is already open elsewhere
+(another shell's Emacs prompt) and the bridge asks again shortly rather than
+prompting twice. Requests other than streams give up after
+`--request-timeout` (15s) and name the server.
 
 Prebuilt static binaries for Linux and macOS (amd64, arm64) are attached to
 each [GitHub release](https://github.com/chadac-me/scooter-mode/releases), with

@@ -42,6 +42,7 @@ func main() {
 	headersCmd := fs.String("headers-command", "", "shell command printing the auth headers as a JSON object; {retry} becomes t after an auth wall")
 	headersFile := fs.String("headers-file", "", "file holding the auth headers as a JSON object")
 	replayTurns := fs.Int("replay-turns", 0, "on load, replay only the last N user turns (0: all)")
+	requestTimeout := fs.Duration("request-timeout", defaultTimeout, "give up on a request that isn't a stream after this long (0: never)")
 	self := fs.Bool("self", false, "use the sandbox's self-access to its own conversation (SCOOTER_SELF_URL, SCOOTER_SELF_TOKEN_PATH, CONVERSATION_ID)")
 	_ = fs.Parse(os.Args[2:]) // ExitOnError: it exits rather than returning one.
 	src := headerSource{command: *headersCmd, file: *headersFile}
@@ -61,6 +62,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	c := newClient(*server, src)
+	c.timeout = *requestTimeout
 	out := newRPC(os.Stdout)
 	a := newAgent(ctx, c, out, opts)
 	if err := out.serve(ctx, os.Stdin, a.handle, a.notify); err != nil {

@@ -20,6 +20,14 @@ func hasUserChunk(updates []update) bool {
 	return false
 }
 
+// attach goes live, then follows the event stream. Live first, so a run
+// that arrives as soon as the stream connects already counts as a push;
+// the stream's resync on connect catches up on anything before it.
+func (s *session) attach() {
+	s.goLive(s.ctx)
+	go s.follow(s.ctx)
+}
+
 // goLive marks the session attached once its replay is out: requests left
 // open in history are asked, and a run already going becomes a push.
 func (s *session) goLive(ctx context.Context) {

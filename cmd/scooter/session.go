@@ -1,10 +1,12 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"strings"
@@ -252,7 +254,7 @@ func (s *session) askPermission(ctx context.Context, in interrupt) {
 	if !still || err != nil || res.Outcome.Outcome != "selected" {
 		return
 	}
-	s.resume(ctx, in.ID, res.Outcome.OptionID, nil)
+	s.answer(ctx, in, res.Outcome.OptionID, nil)
 }
 
 // askForm asks AskUserQuestion's questions as an ACP form.
@@ -283,7 +285,7 @@ func (s *session) askForm(ctx context.Context, in interrupt, qs []question) {
 	}
 	answers, ok := formAnswers(qs, res.Content)
 	if res.Action != "accept" || !ok {
-		s.resume(ctx, in.ID, "", nil)
+		s.answer(ctx, in, "", nil)
 		return
 	}
 	// The answer option carries the result; Scooter offers exactly one.
@@ -291,11 +293,37 @@ func (s *session) askForm(ctx context.Context, in interrupt, qs []question) {
 	if len(in.Metadata.Options) > 0 {
 		optionID = in.Metadata.Options[0].OptionID
 	}
-	s.resume(ctx, in.ID, optionID, map[string]any{"answers": answers})
+	s.answer(ctx, in, optionID, map[string]any{"answers": answers})
+}
+
+// answer resumes in with the client's answer; when Scooter turns it down,
+// it tells the user and asks again.
+func (s *session) answer(ctx context.Context, in interrupt, optionID string, result map[string]any) {
+	err := s.resume(ctx, in.ID, optionID, result)
+	if err == nil || ctx.Err() != nil {
+		return
+	}
+	log.Printf("session %s: answer %s: %v", s.id, in.ID, err)
+	toolCallID := in.ToolCallID
+	if toolCallID == "" {
+		toolCallID = in.ID
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.out.notify("session/update", map[string]any{"sessionId": s.id, "update": update{
+		"sessionUpdate": "tool_call_update", "toolCallId": toolCallID, "status": "failed",
+		"content": []any{map[string]any{"type": "content", "content": map[string]any{"type": "text", "text": "Scooter did not take the answer: " + err.Error()}}},
+	}})
+	if _, still := s.pending[in.ID]; still {
+		delete(s.asked, in.ID)
+		s.askLocked(ctx, in)
+	}
 }
 
 // resume answers an interrupt as the web UI does; no optionID dismisses it.
-func (s *session) resume(ctx context.Context, id, optionID string, result map[string]any) {
+// Scooter replies once the resumed run starts and drops the answer if we
+// hang up first, so it waits for that or for Scooter's refusal.
+func (s *session) resume(ctx context.Context, id, optionID string, result map[string]any) error {
 	entry := map[string]any{"interruptId": id, "status": "cancelled"}
 	if optionID != "" {
 		payload := map[string]any{"optionId": optionID}
@@ -306,14 +334,37 @@ func (s *session) resume(ctx context.Context, id, optionID string, result map[st
 	}
 	resp, err := s.c.do(ctx, "POST", "/agui", map[string]any{"threadId": s.id, "resume": []any{entry}})
 	if err != nil {
-		log.Printf("session %s: answer %s: %v", s.id, id, err)
-		return
+		return err
 	}
-	// The resumed run streams back through the integrity log instead.
-	resp.Body.Close()
+	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		log.Printf("session %s: answer %s: %s", s.id, id, resp.Status)
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b)))
 	}
+	var refused error
+	err = sseEach(resp.Body, func(data []byte) bool {
+		var ev aguiEvent
+		if json.Unmarshal(data, &ev) != nil {
+			return true
+		}
+		switch ev.Type {
+		case "RUN_STARTED", "PERMISSION_RESOLVED":
+			// Taken; the resumed run streams back through the integrity log.
+			return false
+		case "RUN_ERROR":
+			refused = errors.New(cmp.Or(ev.Message, "the run failed to start"))
+			return false
+		}
+		return true
+	})
+	if refused != nil {
+		return refused
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		// Ended without a run, as for a dismissal.
+		return nil
+	}
+	return err
 }
 
 // follow tails the integrity stream, resyncing after gaps or drops.

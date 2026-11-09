@@ -161,8 +161,7 @@ func (a *agent) resumeSession(ctx context.Context, id string) (any, func(), erro
 	if err := s.load(ctx, false); err != nil {
 		return nil, nil, wrap(err)
 	}
-	go s.follow(s.ctx)
-	return a.sessionResult(ctx, s, false), func() { s.goLive(s.ctx) }, nil
+	return a.sessionResult(ctx, s, false), s.attach, nil
 }
 
 // closeSession stops following a conversation and ends its turn, if any.

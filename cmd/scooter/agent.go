@@ -95,8 +95,7 @@ func (a *agent) handle(ctx context.Context, method string, params json.RawMessag
 		if err := s.load(ctx, true); err != nil {
 			return nil, nil, wrap(err)
 		}
-		go s.follow(s.ctx)
-		return a.sessionResult(ctx, s, false), func() { s.goLive(s.ctx) }, nil
+		return a.sessionResult(ctx, s, false), s.attach, nil
 	case "session/list":
 		res, err := a.listSessions(ctx, params)
 		return res, nil, err
@@ -179,8 +178,7 @@ func (a *agent) newSession(ctx context.Context, cwd string) (any, func(), error)
 			if err := s.load(s.ctx, true); err != nil {
 				log.Printf("session %s: load: %v", s.id, err)
 			}
-			go s.follow(s.ctx)
-			s.goLive(s.ctx)
+			s.attach()
 		}, nil
 	}
 
@@ -201,8 +199,7 @@ func (a *agent) newSession(ctx context.Context, cwd string) (any, func(), error)
 	if a.opts.project {
 		s.prefix = projectContext(ctx, cwd)
 	}
-	go s.follow(s.ctx)
-	return a.sessionResult(ctx, s, true), func() { s.goLive(s.ctx) }, nil
+	return a.sessionResult(ctx, s, true), s.attach, nil
 }
 
 // probe checks the server and credentials before any session.

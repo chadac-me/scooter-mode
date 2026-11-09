@@ -64,6 +64,7 @@ func (a *agent) watchLinks(ctx context.Context) {
 	}
 	backoff := time.Second
 	for ctx.Err() == nil {
+		fresh := a.c.refreshed()
 		err := a.c.stream(ctx, "/conversations/events", func() { backoff = time.Second }, func(data []byte) {
 			var f linkFrame
 			if json.Unmarshal(data, &f) != nil {
@@ -86,6 +87,8 @@ func (a *agent) watchLinks(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(backoff):
+		case <-fresh:
+			// Someone signed in: try the new headers now.
 		}
 		backoff = min(backoff*2, time.Minute)
 	}

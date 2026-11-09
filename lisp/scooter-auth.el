@@ -10,6 +10,9 @@
 ;; - `cookie': the `_oauth2_proxy' session cookie, pasted or read from
 ;;   auth-source, and saved there.  Works with any oauth2-proxy, GitHub-backed
 ;;   ones included.
+;; - (cookie :browser firefox): the same cookie, taken from the default
+;;   Firefox profile; when it has no live session, the sign-in page opens
+;;   there and Emacs waits for the cookie to appear.
 ;; - (oidc :issuer URL :client-id ID): an ID token from Authorization Code +
 ;;   PKCE with a loopback redirect, sent as a bearer token.  oauth2-proxy
 ;;   must run with --skip-jwt-bearer-tokens.  The refresh token is kept in
@@ -18,6 +21,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'auth-source)
 (require 'browse-url)
 (require 'url-util)
@@ -46,17 +50,22 @@ RETRY non-nil means the last headers hit the auth wall."
   (when retry (scooter-auth-forget server))
   (pcase (scooter-auth--backend server)
     (`(nil) nil)
-    (`(cookie) `(("Cookie" . ,(concat "_oauth2_proxy=" (scooter-auth--cookie server)))))
+    (`(cookie . ,_) `(("Cookie" . ,(concat "_oauth2_proxy=" (scooter-auth--cookie server)))))
     (`(oidc . ,opts) `(("Authorization" . ,(concat "Bearer " (scooter-auth--id-token server opts)))))
     (other (user-error "Scooter[%s]: unknown :auth %S" server other))))
 
 ;;;###autoload
 (defun scooter-auth-headers-json (server &optional retry)
   "Return SERVER's auth headers as a JSON string, for `scooter acp'.
-RETRY is as in `scooter-auth-headers'."
+RETRY is as in `scooter-auth-headers'.  While a sign-in for SERVER is
+already waiting on the user, return \"null\": the bridge asks again
+shortly instead of opening a second prompt or failing its request."
   (let ((json-encoding-pretty-print nil))
-    (let ((headers (scooter-auth-headers server retry)))
-      (if headers (json-encode headers) "{}"))))
+    (condition-case nil
+        (let ((headers (scooter-auth-headers
+                        server (and retry (not (scooter-auth--get server :signing-in))))))
+          (if headers (json-encode headers) "{}"))
+      (scooter-auth-busy "null"))))
 
 (defun scooter-auth-forget (server)
   "Drop SERVER's cached ID token and cookie; the next request logs in again."
@@ -84,7 +93,24 @@ RETRY is as in `scooter-auth-headers'."
                   (stored (scooter-auth--secret (scooter-server-host server) "_oauth2_proxy")))
         (scooter-auth--put server :cookie stored)
         stored)
-      (scooter-auth-set-cookie server)))
+      (scooter-auth--signing-in server (if (plist-get (cdr (scooter-auth--backend server)) :browser)
+                                           #'scooter-auth--browser-sign-in
+                                         #'scooter-auth-set-cookie))))
+
+(define-error 'scooter-auth-busy "Already signing in" 'user-error)
+
+(defun scooter-auth--signing-in (server sign-in)
+  "Call SIGN-IN with SERVER, refusing to nest a second one.
+Another shell's bridge asking for headers while the prompt is open runs
+inside it (emacsclient is served from the prompt's input loop), so it
+signals `scooter-auth-busy' rather than open a second prompt;
+`scooter-auth-headers-json' turns that into a \"try again\" answer."
+  (when (scooter-auth--get server :signing-in)
+    (signal 'scooter-auth-busy
+            (list (format "Scooter[%s]: already signing in; finish that first" server))))
+  (scooter-auth--put server :signing-in t)
+  (unwind-protect (funcall sign-in server)
+    (scooter-auth--put server :signing-in nil)))
 
 ;;;###autoload
 (defun scooter-auth-set-cookie (server &optional cookie)
@@ -99,6 +125,163 @@ RETRY is as in `scooter-auth-headers'."
   (scooter-auth--put server :cookie cookie :cookie-refused nil)
   (scooter-auth--save-secret (scooter-server-host server) "_oauth2_proxy" cookie)
   cookie)
+
+;;;; Browser sign-in through Firefox
+
+(defcustom scooter-auth-firefox-directories
+  '("~/.mozilla/firefox" "~/.config/mozilla/firefox"
+    "~/Library/Application Support/Firefox"
+    "~/snap/firefox/common/.mozilla/firefox"
+    "~/.var/app/org.mozilla.firefox/.mozilla/firefox")
+  "Where to look for Firefox's profiles.ini; the first one found wins."
+  :type '(repeat directory)
+  :group 'scooter)
+
+(defcustom scooter-auth-firefox-profile nil
+  "The Firefox profile directory to read cookies from.
+nil means the one Firefox opens by default, per profiles.ini."
+  :type '(choice (const :tag "Default profile" nil) directory)
+  :group 'scooter)
+
+(defcustom scooter-auth-browser-check-path "/oauth2/auth"
+  "Path on the server that answers 2xx only to a signed-in cookie.
+The default is oauth2-proxy's own auth check."
+  :type 'string
+  :group 'scooter)
+
+(defcustom scooter-auth-browser-poll-interval 1
+  "Seconds between looks at the Firefox profile during a sign-in."
+  :type 'number
+  :group 'scooter)
+
+(defun scooter-auth--ini-sections (file)
+  "Return FILE's INI sections as a list of (NAME . ALIST)."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (let (sections)
+      (dolist (line (split-string (buffer-string) "\r?\n"))
+        (setq line (string-trim line))
+        (cond
+         ((string-match "\\`\\[\\(.+\\)\\]\\'" line)
+          (push (list (match-string 1 line)) sections))
+         ((and sections (string-match "\\`\\([^=;#]+?\\)[ \t]*=[ \t]*\\(.*\\)\\'" line))
+          (setcdr (car sections) (cons (cons (match-string 1 line) (match-string 2 line))
+                                       (cdar sections))))))
+      (nreverse sections))))
+
+(defun scooter-auth--firefox-profile ()
+  "Return the Firefox profile directory to read cookies from, or nil."
+  (or scooter-auth-firefox-profile
+      (when-let* ((root (seq-find (lambda (dir) (file-exists-p (expand-file-name "profiles.ini" dir)))
+                                  scooter-auth-firefox-directories))
+                  (sections (scooter-auth--ini-sections (expand-file-name "profiles.ini" root))))
+        (let* ((get (lambda (section key) (cdr (assoc key (cdr section)))))
+               (installed (seq-find (lambda (s) (and (string-prefix-p "Install" (car s))
+                                                     (funcall get s "Default")))
+                                    sections))
+               (profiles (seq-filter (lambda (s) (string-prefix-p "Profile" (car s))) sections))
+               (profile (or (seq-find (lambda (s) (equal (funcall get s "Default") "1")) profiles)
+                            (car profiles))))
+          (cond
+           (installed (expand-file-name (funcall get installed "Default") root))
+           ((funcall get profile "Path")
+            (if (equal (funcall get profile "IsRelative") "0")
+                (funcall get profile "Path")
+              (expand-file-name (funcall get profile "Path") root))))))))
+
+(defun scooter-auth--cookie-hosts (host)
+  "Return the moz_cookies hosts whose cookies a request to HOST carries.
+Most specific first: HOST's own cookies, then domain cookies for HOST
+and each parent domain."
+  (let ((labels (split-string host "\\.")) hosts)
+    (while labels
+      (push (concat "." (string-join labels ".")) hosts)
+      (setq labels (cdr labels)))
+    (cons host (nreverse hosts))))
+
+(defun scooter-auth--firefox-cookies (profile host)
+  "Return the `_oauth2_proxy' cookie values PROFILE would send to HOST.
+Best candidates first.  A session oauth2-proxy split into
+`_oauth2_proxy_0', `_oauth2_proxy_1', ... comes back joined.  Reads a
+copy of cookies.sqlite and its WAL, so Firefox's lock and unflushed
+writes don't matter."
+  (let ((source (expand-file-name "cookies.sqlite" profile)))
+    (when (and (sqlite-available-p) (file-exists-p source))
+      (let* ((dir (make-temp-file "scooter-cookies" t))
+             (copy (expand-file-name "cookies.sqlite" dir))
+             (hosts (scooter-auth--cookie-hosts host))
+             rows)
+        (unwind-protect
+            (progn
+              (dolist (suffix '("" "-wal" "-shm"))
+                (when (file-exists-p (concat source suffix))
+                  (copy-file (concat source suffix) (concat copy suffix) t)))
+              (let ((db (sqlite-open copy)))
+                (unwind-protect
+                    (setq rows (sqlite-select
+                                db (format "SELECT host, originAttributes, name, value FROM moz_cookies
+ WHERE host IN (%s) AND (name = '_oauth2_proxy' OR name GLOB '_oauth2_proxy_[0-9]*')
+ ORDER BY originAttributes != '', lastAccessed DESC"
+                                           (mapconcat (lambda (_) "?") hosts ","))
+                                hosts))
+                  (sqlite-close db))))
+          (delete-directory dir t))
+        (let (values)
+          (dolist (h hosts)
+            (dolist (origin (delete-dups (mapcar #'cadr (seq-filter (lambda (r) (equal (car r) h)) rows))))
+              (let* ((jar (seq-filter (lambda (r) (and (equal (car r) h) (equal (cadr r) origin))) rows))
+                     (whole (seq-find (lambda (r) (equal (nth 2 r) "_oauth2_proxy")) jar))
+                     (index (lambda (r) (string-to-number (substring (nth 2 r) 14))))
+                     (parts (sort (seq-remove (lambda (r) (eq r whole)) jar)
+                                  (lambda (a b) (< (funcall index a) (funcall index b))))))
+                (push (if whole (nth 3 whole) (mapconcat (lambda (r) (nth 3 r)) parts "")) values))))
+          (delete-dups (delete "" (nreverse values))))))))
+
+(defun scooter-auth--cookie-valid-p (server cookie)
+  "Non-nil when SERVER's auth proxy accepts the `_oauth2_proxy' COOKIE."
+  (pcase (ignore-errors
+           (scooter-http-curl "GET" (scooter-server-url server scooter-auth-browser-check-path)
+                              :headers `(("Cookie" . ,(concat "_oauth2_proxy=" cookie)))))
+    (`(,status ,ctype ,_) (and (<= 200 status 299) (not (scooter-http-auth-wall-p status ctype))))))
+
+(defun scooter-auth--browser-sign-in (server)
+  "Return a signed-in cookie for SERVER from Firefox, signing in there if needed.
+Without a Firefox profile (or sqlite support), ask to paste one."
+  (let ((profile (scooter-auth--firefox-profile))
+        (rejected nil))
+    (if (not (and profile (sqlite-available-p) (file-directory-p profile)))
+        (progn
+          (message "Scooter[%s]: no Firefox profile found; paste the cookie instead" server)
+          (scooter-auth-set-cookie server))
+      (let* ((look (lambda ()
+                     (seq-find (lambda (value)
+                                 (or (scooter-auth--cookie-valid-p server value)
+                                     (progn (push value rejected) nil)))
+                               (seq-difference (ignore-errors (scooter-auth--firefox-cookies
+                                                               profile (scooter-server-host server)))
+                                               rejected))))
+             (found (funcall look)))
+        (unless found
+          (let ((rd (url-filename (url-generic-parse-url (scooter-server-url server)))))
+            (browse-url (scooter-server-url
+                         server (concat "/oauth2/start?rd="
+                                        (url-hexify-string (if (string-empty-p rd) "/" rd))))))
+          (message "Scooter[%s]: sign in in your browser (C-g cancels)..." server)
+          (with-timeout (scooter-auth-login-timeout
+                         (user-error "Scooter[%s]: sign-in not finished after %d seconds"
+                                     server scooter-auth-login-timeout))
+            (while (not (setq found (funcall look)))
+              (accept-process-output nil scooter-auth-browser-poll-interval))))
+        (message "Scooter[%s]: signed in" server)
+        (scooter-auth-set-cookie server found)))))
+
+;;;###autoload
+(defun scooter-auth-browser-login (server)
+  "Sign in to SERVER through Firefox and save the session cookie.
+Reuses Firefox's session when it has a live one; otherwise opens the
+sign-in page there and waits for it to finish."
+  (interactive (list (scooter-current-server t)))
+  (scooter-auth--signing-in server #'scooter-auth--browser-sign-in))
 
 ;;;; auth-source
 
@@ -190,7 +373,7 @@ RETRY is as in `scooter-auth-headers'."
     (if (and token (> (scooter-auth--jwt-exp token) (+ (float-time) 60)))
         token
       (or (ignore-errors (scooter-auth--refresh server opts))
-          (scooter-auth-login server)))))
+          (scooter-auth--signing-in server #'scooter-auth-login)))))
 
 (defun scooter-auth--store (server opts reply)
   "Cache the tokens in REPLY for SERVER, persisting the refresh token per OPTS."

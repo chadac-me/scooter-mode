@@ -326,6 +326,7 @@ func (s *session) follow(ctx context.Context) {
 func (s *session) tail(ctx context.Context) {
 	backoff := time.Second
 	for ctx.Err() == nil {
+		fresh := s.c.refreshed()
 		err := s.c.stream(ctx, s.path("/events.integrity"), func() {
 			backoff = time.Second
 			// Catch up on anything appended before the stream went live.
@@ -341,6 +342,8 @@ func (s *session) tail(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(backoff):
+		case <-fresh:
+			// Someone signed in: try the new headers now.
 		}
 		backoff = min(backoff*2, 30*time.Second)
 	}

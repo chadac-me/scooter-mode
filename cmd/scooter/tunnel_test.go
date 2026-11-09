@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,77 @@ type fakeProxy struct {
 	login    bool   // redirect everything to the login page
 	token    string // the Authorization value the proxy accepts
 	noSSH    bool
+
+	// A sleeping sandbox: the conversation's status and whether its ssh
+	// service runs, changed by the resume and start endpoints.
+	sleeping   bool
+	status     string // the conversation's status, e.g. "suspended"
+	sshRunning bool
+	asleepCode int // the status poll's answer while suspended (0: JSON, not running)
+	refuse     int // upgrades refused with 502 first
+	resumes    int
+	starts     int
+}
+
+func (p *fakeProxy) counts() (resumes, starts int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.resumes, p.starts
+}
+
+// api plays the conversation endpoints the tunnel uses to wake a sandbox.
+func (p *fakeProxy) api(w http.ResponseWriter, r *http.Request) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/conversations/conv-1":
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"conv-1","status":"`+p.status+`"}`)
+	case r.Method == http.MethodPost && r.URL.Path == "/conversations/conv-1/resume":
+		p.resumes++
+		p.status = "running"
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{}`)
+	case r.Method == http.MethodPost && r.URL.Path == "/conversations/conv-1/web-services/ssh/start":
+		p.starts++
+		if p.status == "running" {
+			p.sshRunning = true
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{}`)
+	default:
+		return false
+	}
+	return true
+}
+
+// sleepingStatus answers the status poll for a sleeping sandbox.
+func (p *fakeProxy) sleepingStatus(w http.ResponseWriter) {
+	p.mu.Lock()
+	asleep, running, code := p.status != "running", p.sshRunning, p.asleepCode
+	p.mu.Unlock()
+	if asleep && code != 0 {
+		w.WriteHeader(code)
+		return
+	}
+	phase := "service"
+	if asleep {
+		phase = "sandbox"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = fmt.Fprintf(w, `{"running":%t,"phase":%q}`, running, phase)
+}
+
+// refuseUpgrade reports whether to answer this upgrade 502, as the proxy
+// does while sshd isn't listening.
+func (p *fakeProxy) refuseUpgrade() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.refuse > 0 {
+		p.refuse--
+		return true
+	}
+	return p.sleeping && !p.sshRunning
 }
 
 func (p *fakeProxy) handler(prefix string) http.HandlerFunc {
@@ -38,11 +110,16 @@ func (p *fakeProxy) handler(prefix string) http.HandlerFunc {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+		if p.api(w, r) {
+			return
+		}
 		switch {
 		case p.origin != "" && r.URL.Path == "/c/conv-1/ssh/":
 			http.Redirect(w, r, p.origin+"/ssh/", http.StatusFound)
 		case p.noSSH && strings.HasSuffix(r.URL.Path, "/__scooter_status"):
 			http.NotFound(w, r)
+		case p.sleeping && r.URL.Path == prefix+"/__scooter_status":
+			p.sleepingStatus(w)
 		case r.URL.Path == prefix+"/__scooter_status":
 			p.mu.Lock()
 			p.polls++
@@ -55,6 +132,10 @@ func (p *fakeProxy) handler(prefix string) http.HandlerFunc {
 				_, _ = io.WriteString(w, `{"running":false,"phase":"sandbox"}`)
 			}
 		case r.URL.Path == prefix+"/" && r.Header.Get("Upgrade") == "websocket":
+			if p.refuseUpgrade() {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
 			echoWebSocket(w, r)
 		case r.URL.Path == prefix+"/":
 			w.Header().Set("Content-Type", "text/html")
@@ -91,6 +172,11 @@ func echoWebSocket(w http.ResponseWriter, r *http.Request) {
 
 func startTunnel(t *testing.T, server string, src headerSource) (io.WriteCloser, *bufio.Reader, <-chan error, *[]string) {
 	t.Helper()
+	return startTunnelWait(t, server, src, 5*time.Second)
+}
+
+func startTunnelWait(t *testing.T, server string, src headerSource, wait time.Duration) (io.WriteCloser, *bufio.Reader, <-chan error, *[]string) {
+	t.Helper()
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	var logs []string
@@ -100,11 +186,13 @@ func startTunnel(t *testing.T, server string, src headerSource) (io.WriteCloser,
 	go func() {
 		err := runTunnel(ctx, tunnelOptions{
 			server: server, conversation: "conv-1", source: src,
-			wait: 5 * time.Second, poll: 10 * time.Millisecond,
+			wait: wait, poll: 10 * time.Millisecond,
 			stdin: inR, stdout: outW,
 			log: func(s string) { logs = append(logs, s) },
 		})
 		_ = outW.Close()
+		// Unblocks a test still writing to a tunnel that gave up.
+		_ = inR.CloseWithError(err)
 		done <- err
 	}()
 	return inW, bufio.NewReader(outR), done, &logs
@@ -177,6 +265,59 @@ func TestTunnelWithoutSSHService(t *testing.T) {
 	_, _, done, _ := startTunnel(t, srv.URL, bearer("t"))
 	if err := <-done; err == nil || !strings.Contains(err.Error(), "webServices.ssh") {
 		t.Fatalf("err = %v, want a hint about webServices.ssh", err)
+	}
+}
+
+func TestTunnelResumesSuspendedSandbox(t *testing.T) {
+	// A suspended sandbox's proxy answers 503 rather than a status.
+	p := &fakeProxy{token: "t", sleeping: true, status: "suspended", asleepCode: http.StatusServiceUnavailable}
+	srv := httptest.NewServer(p.handler("/c/conv-1/ssh"))
+	defer srv.Close()
+	in, out, done, logs := startTunnel(t, srv.URL, bearer("t"))
+	echoes(t, in, out, done)
+	if resumes, starts := p.counts(); resumes != 1 || starts != 1 {
+		t.Errorf("resumes = %d, starts = %d; want 1 and 1", resumes, starts)
+	}
+	if !strings.Contains(strings.Join(*logs, "\n"), "resuming") {
+		t.Errorf("logs = %q, want a resuming line", *logs)
+	}
+}
+
+func TestTunnelStartsSSHInRunningSandbox(t *testing.T) {
+	p := &fakeProxy{token: "t", sleeping: true, status: "running"}
+	srv := httptest.NewServer(p.handler("/c/conv-1/ssh"))
+	defer srv.Close()
+	in, out, done, _ := startTunnel(t, srv.URL, bearer("t"))
+	echoes(t, in, out, done)
+	if resumes, starts := p.counts(); resumes != 0 || starts != 1 {
+		t.Errorf("resumes = %d, starts = %d; want 0 and 1", resumes, starts)
+	}
+}
+
+func TestTunnelRetriesRefusedUpgrade(t *testing.T) {
+	// The status says running before sshd listens.
+	p := &fakeProxy{token: "t", status: "running", refuse: 2}
+	srv := httptest.NewServer(p.handler("/c/conv-1/ssh"))
+	defer srv.Close()
+	in, out, done, _ := startTunnel(t, srv.URL, bearer("t"))
+	echoes(t, in, out, done)
+	if _, starts := p.counts(); starts != 1 {
+		t.Errorf("starts = %d, want 1", starts)
+	}
+}
+
+func TestTunnelGivesUpAfterWait(t *testing.T) {
+	p := &fakeProxy{token: "t", status: "running", refuse: 1 << 30}
+	srv := httptest.NewServer(p.handler("/c/conv-1/ssh"))
+	defer srv.Close()
+	start := time.Now()
+	_, _, done, _ := startTunnelWait(t, srv.URL, bearer("t"), 300*time.Millisecond)
+	err := <-done
+	if err == nil || !strings.Contains(err.Error(), "502") {
+		t.Fatalf("err = %v, want the refused upgrade", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("gave up after %s, want about the 300ms wait", d)
 	}
 }
 

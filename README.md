@@ -67,8 +67,14 @@ the `scooter` binary on `PATH` (`nix profile install github:chadac-me/scooter-mo
 ```
 
 `<conversation>` is the title slug shown in `scooter-list` (or an id prefix),
-and both parts complete. In a Scooter agent-shell buffer, `C-x C-f`
-and `C-c s f` start in that conversation's sandbox (`C-u C-c s f` asks). Tramp runs `ssh` with `scooter tunnel` as its
+and both parts complete. In a Scooter agent-shell buffer, `C-x C-f`,
+`C-c C-f` and `C-c s f` start in that conversation's sandbox (`C-u C-c s f`
+asks), and `C-c C-j` opens Dired on its `/workspace` (agent-shell's
+`C-c C-d` stays comint's send-EOF). The keys live in
+`scooter-agent-shell-files-mode-map`, so `keymap-set` rebinds them. Paths
+like `/workspace/foo.mjs:42` (also `:42:5` and `#L42`) in the agent's text
+and tool output become links: `RET` or a click opens the file in the sandbox
+at that line (`scooter-agent-shell-link-paths` turns this off). Tramp runs `ssh` with `scooter tunnel` as its
 ProxyCommand, which wakes the sandbox, starts its `ssh` web service and pipes
 sshd over a WebSocket. The sandbox needs `webServices.ssh.enable`, and `ssh`
 must be on your `PATH`. Before each connect Emacs writes the conversation id
@@ -81,6 +87,15 @@ to the client key.
 stdin/stdout to a conversation's sshd, for use as an ssh `ProxyCommand`.
 `--spec-file FILE` reads the server, conversation and headers from one JSON
 file instead: `{"url": …, "conversation": …, "headers": {…}}`.
+While the ssh service doesn't answer (the proxy's status poll fails with a
+5xx, says it isn't running, or the upgrade gets a 5xx), it resumes the
+conversation if it isn't running, starts the sandbox's `ssh` web service and
+retries, for up to `--wait` (default 5m). From a shell:
+
+```sh
+ssh -o ProxyCommand="scooter tunnel --server https://scooter.example.org --conversation <id> \
+      --headers-command 'pass show scooter/headers'" root@sandbox
+```
 
 ## `scooter acp`
 

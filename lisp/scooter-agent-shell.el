@@ -8,7 +8,8 @@
 ;; Each server becomes an agent-shell agent that runs `scooter acp'.  The
 ;; bridge asks this Emacs for auth headers through emacsclient, so login and
 ;; refresh stay in `scooter-auth'.  In a Scooter shell, `find-file' starts in
-;; the conversation's sandbox over Tramp.
+;; the conversation's sandbox over Tramp, and /workspace paths in the shell
+;; open the sandbox file.
 
 ;;; Code:
 
@@ -182,12 +183,139 @@ local, and before the conversation exists."
   (let ((default-directory (or (scooter-agent-shell-directory) default-directory)))
     (call-interactively #'find-file)))
 
+(defun scooter-agent-shell-dired ()
+  "Open Dired on this conversation's sandbox /workspace/."
+  (interactive)
+  (dired (or (scooter-agent-shell-directory)
+             (user-error "Scooter: this shell has no remote sandbox yet"))))
+
+;;;; Sandbox paths in the shell
+
+(defcustom scooter-agent-shell-link-paths t
+  "Non-nil makes /workspace paths in Scooter shells open the sandbox file.
+A path may end in :LINE, :LINE:COLUMN or #LLINE."
+  :type 'boolean
+  :group 'scooter)
+
+(defconst scooter-agent-shell--path-chars "[:alnum:]._~/@+-"
+  "The chars of a linked path, as in `skip-chars-forward'.")
+
+(defconst scooter-agent-shell--path-regexp
+  (rx "/workspace" (? "/" (* (any alnum "._~/@+-")))
+      (? (or ":" "#L") (group (+ digit)) (? ":" (group (+ digit)))))
+  "A sandbox path, with the line and column it may name.")
+
+(defun scooter-agent-shell-sandbox-file (path)
+  "Return PATH, a path in this shell's sandbox, as a file name here.
+In a remote conversation that is its Tramp name; else PATH itself."
+  (if-let* ((dir (scooter-agent-shell-directory)))
+      (concat (file-remote-p dir) path)
+    path))
+
+(defun scooter-agent-shell-open-path (path &optional line column)
+  "Visit PATH in this shell's sandbox, at LINE and COLUMN when given."
+  (let ((file (scooter-agent-shell-sandbox-file path)))
+    (if (fboundp 'agent-shell-markdown-visit-file)
+        (agent-shell-markdown-visit-file :file file :line-start line :column column)
+      (find-file file)
+      (when line
+        (goto-char (point-min))
+        (forward-line (1- line))
+        (when column (move-to-column (1- column)))))))
+
+(defun scooter-agent-shell-open-path-at-point (&optional event)
+  "Visit the sandbox path at point, or where EVENT clicked."
+  (interactive (list last-nonmenu-event))
+  (let* ((pos (if (mouse-event-p event) (posn-point (event-end event)) (point)))
+         (buffer (if (mouse-event-p event) (window-buffer (posn-window (event-end event))) (current-buffer)))
+         (target (with-current-buffer buffer
+                   (seq-some (lambda (ov) (overlay-get ov 'scooter-path)) (overlays-at pos)))))
+    (unless target (user-error "No sandbox path here"))
+    (with-current-buffer buffer
+      (apply #'scooter-agent-shell-open-path target))))
+
+(defvar-keymap scooter-agent-shell-path-map
+  :doc "Keys on a sandbox path in a Scooter shell."
+  "RET" #'scooter-agent-shell-open-path-at-point
+  "<mouse-2>" #'scooter-agent-shell-open-path-at-point
+  "<follow-link>" 'mouse-face)
+
+(defun scooter-agent-shell--path-char-p (char)
+  "Non-nil when CHAR can be part of a linked path."
+  (and char (string-match-p (concat "[" scooter-agent-shell--path-chars "]") (string char))))
+
+(defun scooter-agent-shell--link-paths (beg end)
+  "Link the sandbox paths in the lines around BEG..END."
+  (save-excursion
+    (save-match-data
+      (let ((beg (max (progn (goto-char beg) (line-beginning-position)) (- beg 512) (point-min)))
+            (end (min (progn (goto-char end) (line-end-position)) (+ end 512) (point-max)))
+            (case-fold-search nil))
+        ;; Relink whole old links, which the edit may have cut short.
+        (dolist (ov (overlays-in beg end))
+          (when (overlay-get ov 'scooter-path)
+            (setq beg (min beg (overlay-start ov))
+                  end (max end (overlay-end ov)))
+            (delete-overlay ov)))
+        (goto-char beg)
+        (while (re-search-forward scooter-agent-shell--path-regexp end t)
+          (let* ((start (match-beginning 0))
+                 (line (and (match-beginning 1) (string-to-number (match-string 1))))
+                 (column (and (match-beginning 2) (string-to-number (match-string 2))))
+                 (path-end (if line
+                               ;; Before the ":" or "#L".
+                               (- (match-beginning 1)
+                                  (if (eq (char-before (match-beginning 1)) ?:) 1 2))
+                             (match-end 0)))
+                 ;; A sentence's full stop isn't part of the path.
+                 (path (string-trim-right (buffer-substring-no-properties start path-end) "[.]+"))
+                 (link-end (if line (match-end 0) (+ start (length path)))))
+            (unless (or (scooter-agent-shell--path-char-p (char-before start))
+                        ;; /workspacefoo, not /workspace.
+                        (and (equal path "/workspace")
+                             (scooter-agent-shell--path-char-p (char-after (+ start (length path)))))
+                        ;; A path running into a word: /workspace/a:12b.
+                        (and line (scooter-agent-shell--path-char-p (char-after link-end))
+                             (not (eq (char-after link-end) ?.))))
+              (let ((ov (make-overlay start link-end nil t nil)))
+                (overlay-put ov 'scooter-path (list path line column))
+                (overlay-put ov 'face 'link)
+                (overlay-put ov 'mouse-face 'highlight)
+                (overlay-put ov 'help-echo "RET, mouse-1: open in the Scooter sandbox")
+                (overlay-put ov 'keymap scooter-agent-shell-path-map)
+                (overlay-put ov 'evaporate t)))))))))
+
+(defun scooter-agent-shell--link-changed (beg end _old-length)
+  "Link sandbox paths in text changed between BEG and END."
+  (scooter-agent-shell--link-paths beg end))
+
+(defun scooter-agent-shell--unlink-paths ()
+  "Remove this buffer's sandbox path links."
+  (dolist (ov (overlays-in (point-min) (point-max)))
+    (when (overlay-get ov 'scooter-path) (delete-overlay ov))))
+
 (defvar-keymap scooter-agent-shell-files-mode-map
-  "<remap> <find-file>" #'scooter-agent-shell-find-file)
+  :doc "Keys for the sandbox's files in a Scooter shell.
+Rebind them here, e.g. (keymap-set scooter-agent-shell-files-mode-map
+\"C-c f\" #\\='scooter-agent-shell-find-file)."
+  "<remap> <find-file>" #'scooter-agent-shell-find-file
+  "C-c C-f" #'scooter-agent-shell-find-file
+  ;; C-c C-d is comint's send-EOF; C-c C-j echoes C-x C-j, `dired-jump'.
+  "C-c C-j" #'scooter-agent-shell-dired)
 
 (define-minor-mode scooter-agent-shell-files-mode
-  "Make `find-file' in a Scooter shell start in its sandbox."
-  :keymap scooter-agent-shell-files-mode-map)
+  "Open a Scooter shell's sandbox files.
+`find-file' starts in the sandbox, and /workspace paths in the shell
+\(with `scooter-agent-shell-link-paths') open the sandbox file, at the
+line they name.
+
+\\{scooter-agent-shell-files-mode-map}"
+  :keymap scooter-agent-shell-files-mode-map
+  (scooter-agent-shell--unlink-paths)
+  (remove-hook 'after-change-functions #'scooter-agent-shell--link-changed t)
+  (when (and scooter-agent-shell-files-mode scooter-agent-shell-link-paths)
+    (add-hook 'after-change-functions #'scooter-agent-shell--link-changed nil t)
+    (scooter-agent-shell--link-paths (point-min) (point-max))))
 
 (defun scooter-agent-shell--enable-files ()
   "Turn on `scooter-agent-shell-files-mode' in Scooter shells."

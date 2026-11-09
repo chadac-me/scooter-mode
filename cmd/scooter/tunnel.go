@@ -57,7 +57,7 @@ func runTunnel(ctx context.Context, o tunnelOptions) error {
 func sshServiceURL(ctx context.Context, c *client, conversation string) (string, error) {
 	path := "/c/" + url.PathEscape(conversation) + "/ssh/"
 	for attempt := 0; ; attempt++ {
-		headers, err := c.currentHeaders(ctx, attempt > 0)
+		headers, gen, err := c.currentHeaders(ctx, false)
 		if err != nil {
 			return "", err
 		}
@@ -90,6 +90,9 @@ func sshServiceURL(ctx context.Context, c *client, conversation string) (string,
 		}
 		if attempt > 0 {
 			return "", fmt.Errorf("%s: %w", c.base, errAuthWall)
+		}
+		if err := c.refresh(ctx, gen, false); err != nil {
+			return "", fmt.Errorf("%s: %w: %w", c.base, errAuthWall, err)
 		}
 	}
 }
@@ -143,7 +146,7 @@ func waitForService(ctx context.Context, c *client, base string, o tunnelOptions
 // dialService opens the WebSocket, reloading headers once on an auth wall.
 func dialService(ctx context.Context, c *client, rawURL string) (*wsConn, error) {
 	for attempt := 0; ; attempt++ {
-		headers, err := c.currentHeaders(ctx, attempt > 0)
+		headers, gen, err := c.currentHeaders(ctx, false)
 		if err != nil {
 			return nil, err
 		}
@@ -151,6 +154,9 @@ func dialService(ctx context.Context, c *client, rawURL string) (*wsConn, error)
 		var he *handshakeError
 		if !errors.As(err, &he) || !isAuthWall(he.resp) || attempt > 0 {
 			return ws, err
+		}
+		if err := c.refresh(ctx, gen, false); err != nil {
+			return nil, fmt.Errorf("%s: %w: %w", c.base, errAuthWall, err)
 		}
 	}
 }

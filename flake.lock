@@ -53,7 +53,34 @@
       "inputs": {
         "flake-parts": "flake-parts",
         "nixpkgs": "nixpkgs",
+        "scooter-cli": "scooter-cli",
         "systems": "systems"
+      }
+    },
+    "scooter-cli": {
+      "inputs": {
+        "flake-parts": [
+          "flake-parts"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "systems": [
+          "systems"
+        ]
+      },
+      "locked": {
+        "lastModified": 1794940349,
+        "narHash": "sha256-lQ82VQrsTLySExWiBBT6frsjITO802Hegiw6uEbuFtw=",
+        "owner": "chadac-me",
+        "repo": "scooter-cli",
+        "rev": "c4d320e263713cc22c4bededc3df57ac6b02c01e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "chadac-me",
+        "repo": "scooter-cli",
+        "type": "github"
       }
     },
     "systems": {

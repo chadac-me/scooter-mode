@@ -7,19 +7,6 @@ default:
 check-flake:
     nix flake show
 
-# Fail on unformatted Go files.
-check-fmt:
-    test -z "$(gofmt -l .)"
-
-# go vet plus golangci-lint's default linters.
-lint: compile
-    go vet ./...
-    golangci-lint run ./...
-
-# Go unit tests against a fake Scooter server, with the race detector.
-test-go:
-    go test -race ./...
-
 # Byte-compile the Elisp, warnings as errors.
 compile:
     emacs -Q --batch -L lisp --eval '(setq byte-compile-error-on-warn t)' -f batch-byte-compile lisp/*.el
@@ -38,22 +25,10 @@ ert-melpa:
     cask install
     cask exec ert-runner
 
-# All unit tests, Go and Elisp.
-test-unit: test-go deps ert
+# All unit tests.
+test-unit: deps ert
 
 # Fast checks, as CI runs them.
-ci: check-flake check-fmt lint test-unit
+ci: check-flake compile test-unit
     @echo "✅ ci passed"
 
-# Static release binaries in dist/, one per OS/arch, plus SHA256SUMS.
-dist version="dev":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    rm -rf dist && mkdir dist
-    for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-      os=${target%/*} arch=${target#*/}
-      CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
-        -ldflags "-s -w -X main.version={{version}}" \
-        -o "dist/scooter-$os-$arch" ./cmd/scooter
-    done
-    (cd dist && sha256sum scooter-* > SHA256SUMS)

@@ -10,7 +10,8 @@ Work in progress.
 ## Emacs
 
 Needs Emacs 29.1+, `magit-section`, `transient`, `agent-shell` and `curl` 7.76+ (shell-maker checks it), plus
-the `scooter` binary on `PATH` (`nix profile install github:chadac-me/scooter-mode`).
+the `scooter` binary from [scooter-cli](https://github.com/chadac-me/scooter-cli)
+on `PATH` (`nix profile install github:chadac-me/scooter-mode` installs it too).
 
 ```elisp
 (add-to-list 'load-path "~/src/scooter-mode/lisp")
@@ -65,29 +66,10 @@ must be on your `PATH`. Before each connect Emacs writes the conversation id
 and current auth headers to a 0600 file under `scooter-tramp-directory`, next
 to the client key.
 
-## `scooter tunnel`
+## The `scooter` binary
 
-`scooter tunnel --server URL --conversation ID --headers-command CMD` pipes
-stdin/stdout to a conversation's sshd, for use as an ssh `ProxyCommand`.
-`--spec-file FILE` reads the server, conversation and headers from one JSON
-file instead: `{"url": …, "conversation": …, "headers": {…}}`.
-
-## `scooter acp`
-
-`scooter acp --server https://scooter.example.org` is an
-[ACP](https://agentclientprotocol.com) agent on stdin/stdout. A new ACP session
-creates a Scooter conversation; `--conversation <id>` attaches the first one to
-an existing conversation instead. Auth headers come from
-`--headers-command` (or `--headers-file`), as a JSON object such as
-`{"Authorization": "Bearer …"}` or `{"Cookie": "_oauth2_proxy=…"}`. The command
-is rerun once when the server's auth proxy rejects a request, with `{retry}`
-in it replaced by `t` (otherwise `nil`).
-
-Prebuilt static binaries for Linux and macOS (amd64, arm64) are attached to
-each [GitHub release](https://github.com/chadac-me/scooter-mode/releases), with
-`SHA256SUMS`; `scooter version` prints the release. Or run it with Nix:
-
-```sh
-nix run github:chadac-me/scooter-mode -- acp --server https://scooter.example.org \
-  --headers-command 'pass show scooter/headers'
-```
+`scooter acp` (the ACP agent agent-shell talks to) and `scooter tunnel` (the
+Tramp ProxyCommand) live in
+[chadac-me/scooter-cli](https://github.com/chadac-me/scooter-cli), with their
+docs and releases. When `scooter` isn't on `PATH`, `scooter-install` downloads
+the release named by `scooter-install-version` and checks its `SHA256SUMS`.

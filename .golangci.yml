@@ -1,9 +1,0 @@
-version: "2"
-linters:
-  settings:
-    errcheck:
-      # Nothing useful to do when these fail.
-      exclude-functions:
-        - (io.Closer).Close
-        - (net/http.ResponseWriter).Write
-        - fmt.Fprintf

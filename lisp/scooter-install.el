@@ -5,7 +5,7 @@
 
 ;;; Commentary:
 
-;; When `scooter' isn't on PATH, download this package's release of the
+;; When `scooter' isn't on PATH, download a scooter-cli release of the
 ;; bridge from GitHub, check it against the release's SHA256SUMS, and keep it
 ;; under `user-emacs-directory'.
 
@@ -18,7 +18,7 @@
 (defvar url-http-response-status)
 
 (defconst scooter-install-version "0.1.0"
-  "The bridge release this package expects; matches the package version.")
+  "The scooter-cli release this package expects.")
 
 (defcustom scooter-install-binary 'ask
   "Whether to download the bridge when it isn't on PATH.
@@ -27,7 +27,7 @@
   :group 'scooter)
 
 (defcustom scooter-install-release-url
-  "https://github.com/chadac-me/scooter-mode/releases/download/v%s/"
+  "https://github.com/chadac-me/scooter-cli/releases/download/v%s/"
   "Release download URL; %s is the version."
   :type 'string
   :group 'scooter)
@@ -101,7 +101,7 @@
                                  program scooter-install-version))
              scooter-install-binary)
            (scooter-install))
-      (user-error "Scooter: `%s' not found; install it with nix profile install github:chadac-me/scooter-mode"
+      (user-error "Scooter: `%s' not found; install it with nix profile install github:chadac-me/scooter-cli"
                   program)))
 
 (provide 'scooter-install)

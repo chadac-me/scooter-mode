@@ -1,5 +1,4 @@
 result
 *.elc
-dist/
 /.cask/
 /scooter

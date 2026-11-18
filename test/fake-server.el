@@ -3,6 +3,7 @@
 ;; Run with emacs --batch -l fake-server.el; prints its port, then serves:
 ;; /whoami: JSON when the cookie is "good", else a 302 to the login page.
 ;; /forbidden: Scooter's own JSON 403.
+;; /webhooks/agent-api/v1/whoami: JSON for the key sct_good, else a 401.
 ;; /conversations: two conversations; /conversations/events: an empty stream.
 
 (defun fake--reply (conn status ctype body)
@@ -21,6 +22,10 @@
                                         "[{\"id\":\"c1\",\"title\":\"Fix login\",\"model\":\"m1\",\"starred\":true,\"runStartedAt\":1,\"lastActivityAt\":1},{\"id\":\"0123456789\",\"status\":\"suspended\"}]"))
                           ((string-match-p "\\`GET /conversations/events" text)
                            (fake--reply conn "200 OK" "text/event-stream" ""))
+                          ((string-match-p "\\`GET /webhooks/agent-api/v1/whoami " text)
+                           (if (string-match-p "^Authorization: Bearer sct_good\r$" text)
+                               (fake--reply conn "200 OK" "application/json" "{\"id\":\"me\"}")
+                             (fake--reply conn "401 Unauthorized" "application/json" "{\"detail\":\"invalid API key\"}")))
                           ((string-match-p "\\`[A-Z]+ /forbidden" text)
                            (fake--reply conn "403 Forbidden" "application/json" "{\"error\":\"not your conversation\"}"))
                           ((string-match-p "^Cookie: _oauth2_proxy=good" text)

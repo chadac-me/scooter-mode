@@ -64,6 +64,19 @@ Example:
   "Return SERVER's base URL, with PATH appended."
   (concat (string-trim-right (scooter-server-get server :url) "/") path))
 
+(defconst scooter-server-api-key-path "/webhooks/agent-api/v1"
+  "Where Scooter serves callers that sign in with an API key.")
+
+(defun scooter-server-api-key-p (server)
+  "Return non-nil if SERVER signs in with an API key."
+  (eq (scooter-server-get server :auth) 'api-key))
+
+(defun scooter-server-api-url (server &optional path)
+  "Return the URL of SERVER's API, with PATH appended."
+  (scooter-server-url server (concat (and (scooter-server-api-key-p server)
+                                            scooter-server-api-key-path)
+                                       path)))
+
 (defun scooter-server-host (server)
   "Return the host name of SERVER's URL."
   (url-host (url-generic-parse-url (scooter-server-url server))))

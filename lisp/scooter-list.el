@@ -417,7 +417,9 @@ Insert nothing when the last field is empty."
 
 (defun scooter-list--follow (buf server)
   "Follow SERVER's change stream for BUF, reconnecting while BUF lives."
-  (when (buffer-live-p buf)
+  (when (and (buffer-live-p buf)
+             ;; The API-key endpoint serves no change stream; `g' refreshes.
+             (not (scooter-server-api-key-p server)))
     (let ((proc (ignore-errors
                   (scooter-http-stream server "/conversations/events"
                                        (lambda (frame)

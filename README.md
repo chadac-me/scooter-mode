@@ -21,7 +21,7 @@ on `PATH` (`nix profile install github:chadac-me/scooter-mode` installs it too).
 (keymap-global-set "C-c s" scooter-command-map)
 
 (setq scooter-servers
-      '((home :url "https://scooter.example.org" :auth cookie)
+      '((home :url "https://scooter.example.org" :auth api-key)
         (work :url "https://scooter.corp.example"
               :auth (oidc :issuer "https://oauth.id.jumpcloud.com/"
                           :client-id "scooter-emacs"))))
@@ -42,7 +42,12 @@ on `PATH` (`nix profile install github:chadac-me/scooter-mode` installs it too).
 - `C-c s c`, `C-c s r`, `C-c s p` start a conversation from a prompt, the
   region, or the current project; `C-c s R` sends the region to an existing
   one.
-- Auth: `cookie` asks for the `_oauth2_proxy` cookie (or reads it from
+- Auth: `api-key` asks for a key from Scooter's Settings → API keys (or reads
+  it from auth-source, host = the server, user = `scooter-api-key`) and saves
+  it like a cookie. It needs no auth proxy and lasts until the key expires,
+  but reaches only your own conversations, answers questions but not
+  approvals, and has no live list updates (`g` refreshes) or Tramp.
+  `cookie` asks for the `_oauth2_proxy` cookie (or reads it from
   auth-source, host = the server, user = `_oauth2_proxy`) and saves it to
   your first `auth-sources` entry, replacing the old one. `oidc` logs in
   through the browser with PKCE; oauth2-proxy must run with

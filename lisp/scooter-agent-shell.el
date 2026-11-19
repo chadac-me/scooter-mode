@@ -75,7 +75,7 @@ PROJECT non-nil puts the working directory's git checkout in the first prompt."
   (if (scooter-server-get server :self)
       (append (cdr scooter-acp-command) '("--self") (and project '("--project")))
     (append (cdr scooter-acp-command)
-            (list "--server" (scooter-server-url server))
+            (list "--server" (scooter-server-api-url server))
             (when-let* ((model (scooter-server-get server :model))) (list "--model" model))
             (and project '("--project"))
             (scooter-agent-shell--headers-args server))))

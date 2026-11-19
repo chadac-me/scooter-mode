@@ -134,6 +134,30 @@
                 ((symbol-function 'y-or-n-p) #'ignore))
         (should-error (scooter-request 'home "GET" "/whoami") :type 'scooter-auth-wall)))))
 
+(ert-deftest scooter-test-api-key-goes-to-the-api-key-endpoint ()
+  (scooter-test-with-fake-server url
+    (let ((scooter-servers `((home :url ,url :auth api-key)))
+          (scooter-auth--cache (make-hash-table :test #'eq))
+          (asked 0))
+      (scooter-auth-set-api-key 'home "sct_revoked")
+      (cl-letf (((symbol-function 'scooter-auth--secret) #'ignore)
+                ((symbol-function 'scooter-auth--save-secret) #'ignore)
+                ((symbol-function 'read-passwd) (lambda (&rest _) (cl-incf asked) "sct_good"))
+                ((symbol-function 'y-or-n-p) #'ignore))
+        ;; A refused key is asked for again, once.
+        (should (equal (scooter-request 'home "GET" "/whoami") '((id . "me"))))
+        (should (equal (scooter-request 'home "GET" "/whoami") '((id . "me"))))
+        (should (= asked 1))))))
+
+(ert-deftest scooter-test-api-key-must-look-like-one ()
+  (let ((scooter-servers '((home :url "https://s.example" :auth api-key)))
+        (scooter-auth--cache (make-hash-table :test #'eq)))
+    (should-error (scooter-auth-set-api-key 'home "_oauth2_proxy=abc") :type 'user-error)))
+
+(ert-deftest scooter-test-api-key-servers-have-no-tramp ()
+  (let ((scooter-servers '((home :url "https://s.example" :auth api-key))))
+    (should-error (scooter-tramp-spec-json 'home "c1") :type 'user-error)))
+
 (ert-deftest scooter-test-json-403-is-an-error-not-a-wall ()
   (scooter-test-with-fake-server url
     (let ((scooter-servers `((home :url ,url))))

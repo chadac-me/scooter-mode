@@ -91,7 +91,7 @@ HEADERS is an alist.  BODY is a string sent with CONTENT-TYPE."
 (defun scooter-request (server method path &optional body)
   "Send METHOD PATH to SERVER with BODY (encoded as JSON); return the reply.
 Reloads auth once on an auth wall, then signals `scooter-auth-wall'."
-  (let ((url (scooter-server-url server path))
+  (let ((url (scooter-server-api-url server path))
         (payload (and body (json-encode body)))
         (retry nil)
         result)
@@ -125,7 +125,7 @@ Returns the curl process.  The caller restarts it from the sentinel."
                 :noquery t
                 :command (list scooter-curl-program "-sS" "-N" "--fail"
                                "-H" (concat "@" hfile)
-                               (scooter-server-url server path))
+                               (scooter-server-api-url server path))
                 :filter
                 (lambda (_proc chunk)
                   (setq pending (concat pending chunk))

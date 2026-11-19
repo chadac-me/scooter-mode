@@ -14,6 +14,9 @@
 ;;   PKCE with a loopback redirect, sent as a bearer token.  oauth2-proxy
 ;;   must run with --skip-jwt-bearer-tokens.  The refresh token is kept in
 ;;   auth-source.
+;; - `api-key': a key from Settings -> API keys, sent as a bearer token
+;;   to `scooter-server-api-key-path', so no auth proxy is involved.
+;;   Pasted once and saved in auth-source.
 
 ;;; Code:
 
@@ -47,6 +50,7 @@ RETRY non-nil means the last headers hit the auth wall."
   (pcase (scooter-auth--backend server)
     (`(nil) nil)
     (`(cookie) `(("Cookie" . ,(concat "_oauth2_proxy=" (scooter-auth--cookie server)))))
+    (`(api-key) `(("Authorization" . ,(concat "Bearer " (scooter-auth--api-key server)))))
     (`(oidc . ,opts) `(("Authorization" . ,(concat "Bearer " (scooter-auth--id-token server opts)))))
     (other (user-error "Scooter[%s]: unknown :auth %S" server other))))
 
@@ -59,9 +63,10 @@ RETRY is as in `scooter-auth-headers'."
       (if headers (json-encode headers) "{}"))))
 
 (defun scooter-auth-forget (server)
-  "Drop SERVER's cached ID token and cookie; the next request logs in again."
+  "Drop SERVER's cached credentials; the next request logs in again."
   (interactive (list (scooter-current-server t)))
-  (scooter-auth--put server :id-token nil :cookie nil :cookie-refused t))
+  (scooter-auth--put server :id-token nil :cookie nil :cookie-refused t
+                     :api-key nil :api-key-refused t))
 
 (defun scooter-auth--get (server key)
   "Return SERVER's cached auth KEY."
@@ -99,6 +104,33 @@ RETRY is as in `scooter-auth-headers'."
   (scooter-auth--put server :cookie cookie :cookie-refused nil)
   (scooter-auth--save-secret (scooter-server-host server) "_oauth2_proxy" cookie)
   cookie)
+
+;;;; API key
+
+(defun scooter-auth--api-key (server)
+  "Return SERVER's API key, asking when there is none."
+  (or (scooter-auth--get server :api-key)
+      ;; Once refused, a stored key is revoked or expired until replaced.
+      (when-let* (((not (scooter-auth--get server :api-key-refused)))
+                  (stored (scooter-auth--secret (scooter-server-host server) "scooter-api-key")))
+        (scooter-auth--put server :api-key stored)
+        stored)
+      (scooter-auth-set-api-key server)))
+
+;;;###autoload
+(defun scooter-auth-set-api-key (server &optional key)
+  "Set SERVER's API KEY, opening Settings -> API keys to make one."
+  (interactive (list (scooter-current-server t)))
+  (unless key
+    (when (y-or-n-p (format "Scooter[%s]: open Settings -> API keys in a browser? " server))
+      (browse-url (scooter-server-url server "/settings/apikeys")))
+    (setq key (read-passwd (format "Scooter[%s] API key: " server))))
+  (setq key (string-trim key))
+  (unless (string-prefix-p "sct_" key)
+    (user-error "Scooter[%s]: an API key starts with sct_" server))
+  (scooter-auth--put server :api-key key :api-key-refused nil)
+  (scooter-auth--save-secret (scooter-server-host server) "scooter-api-key" key)
+  key)
 
 ;;;; auth-source
 

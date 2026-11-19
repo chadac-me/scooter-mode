@@ -84,6 +84,8 @@ A slug shared by several conversations names the most recent."
 
 (defun scooter-tramp-spec-json (server name)
   "Return the tunnel spec for SERVER's conversation NAME as JSON."
+  (when (scooter-server-api-key-p server)
+    (user-error "Scooter[%s]: Tramp needs a cookie or OIDC login, not an API key" server))
   (let ((json-encoding-pretty-print nil))
     (json-encode `((url . ,(scooter-server-url server))
                    (conversation . ,(scooter-tramp-resolve server name))
